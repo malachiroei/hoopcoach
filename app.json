@@ -61,7 +61,7 @@
             "targetSdkVersion": 34,
             "minSdkVersion": 24,
             "packagingOptions": {
-              "exclude": ["lib/riscv64/"]
+              "exclude": ["lib/riscv64/**"]
             }
           },
           "ios": {
