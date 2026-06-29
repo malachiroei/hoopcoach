@@ -1,0 +1,87 @@
+{
+  "app": {
+    "name": "HoopCoach",
+    "tagline": "המאמן האישי שלך בכדורסל"
+  },
+  "onboarding": {
+    "step1Title": "שים את הטלפון כאן",
+    "step1Desc": "הצב את הטלפון על חצובה בגובה ~1.5 מטר, מאחורי קו העונשין או בצד המגרש — כך שהמצלמה רואה את הסל ואותך.",
+    "step2Title": "בוא נכייל את המגרש",
+    "step2Desc": "סמן 4 נקודות על המסך: שתי פינות הקשת ושתי נקודות על קו העונשין. זה יעזור לנו למפות את מיקומי הזריקות.",
+    "step3Title": "מוכן? בוא נזרוק!",
+    "step3Desc": "האפליקציה תעקוב אוטומטית אחרי הזריקות שלך, תספור סטטיסטיקות ותיצור היילייטס בסוף האימון.",
+    "next": "הבא",
+    "start": "בוא נתחיל!",
+    "skip": "דלג"
+  },
+  "home": {
+    "greeting": "מה קורה, {{name}}!",
+    "startSession": "התחל אימון",
+    "lastSession": "אימון אחרון",
+    "stats": "הסטטיסטיקות שלך",
+    "fgPercent": "אחוזי קליעה",
+    "totalShots": "סה\"כ זריקות",
+    "sessions": "אימונים",
+    "xp": "נקודות XP",
+    "noSessions": "עדיין לא התאמנת — בוא נתחיל!"
+  },
+  "session": {
+    "setup": "הכנה לאימון",
+    "calibrate": "כיול מגרש",
+    "calibrateHint": "הקש על 4 נקודות: שמאל-קשת, ימין-קשת, שמאל-קו, ימין-קו",
+    "pointsMarked": "{{count}}/4 נקודות",
+    "cameraCheck": "בדיקת מצלמה",
+    "cameraReady": "המצלמה מוכנה",
+    "startTraining": "התחל אימון",
+    "live": "אימון חי",
+    "made": "קלע",
+    "missed": "החטיא",
+    "streak": "רצף",
+    "stop": "סיים אימון",
+    "summary": "סיכום אימון",
+    "duration": "משך",
+    "fgPercent": "אחוזי קליעה",
+    "heatMap": "מפת זריקות",
+    "highlights": "היילייטס",
+    "watchHighlights": "צפה בהיילייטס",
+    "recommendations": "המלצות לשיפור",
+    "share": "שתף",
+    "done": "סיום",
+    "minutes": "דקות",
+    "shots": "זריקות"
+  },
+  "history": {
+    "title": "היסטוריה",
+    "empty": "אין אימונים קודמים",
+    "shots": "{{made}}/{{total}} · {{percent}}%"
+  },
+  "profile": {
+    "title": "פרופיל",
+    "badges": "תגים",
+    "totalXp": "סה\"כ XP",
+    "settings": "הגדרות",
+    "confidenceThreshold": "רגישות זיהוי",
+    "resetOnboarding": "איפוס הדרכה"
+  },
+  "badges": {
+    "sniper": "סניפר",
+    "sniperDesc": "10 פגיעות ברצף",
+    "marathon": "מרתון",
+    "marathonDesc": "אימון של שעה",
+    "sharpshooter": "קלע מדויק",
+    "sharpshooterDesc": "80%+ באימון",
+    "rookie": "רוקי",
+    "rookieDesc": "אימון ראשון"
+  },
+  "zones": {
+    "paint": "צבע",
+    "midLeft": "אמצע שמאל",
+    "midRight": "אמצע ימין",
+    "midCenter": "אמצע",
+    "threeLeft": "שלוש שמאל",
+    "threeRight": "שלוש ימין",
+    "threeCenter": "שלוש מרכז",
+    "cornerLeft": "פינה שמאל",
+    "cornerRight": "פינה ימין"
+  }
+}

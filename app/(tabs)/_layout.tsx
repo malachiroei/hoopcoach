@@ -1,0 +1,59 @@
+import { Ionicons } from '@expo/vector-icons';
+import { Tabs } from 'expo-router';
+import { useTranslation } from 'react-i18next';
+import { colors } from '@/src/theme';
+
+export default function TabLayout() {
+  const { t } = useTranslation();
+
+  return (
+    <Tabs
+      screenOptions={{
+        tabBarActiveTintColor: colors.primary,
+        tabBarInactiveTintColor: colors.textMuted,
+        tabBarStyle: {
+          backgroundColor: colors.surface,
+          borderTopColor: colors.border,
+          height: 60,
+          paddingBottom: 8,
+        },
+        tabBarLabelStyle: {
+          fontFamily: 'Rubik_600SemiBold',
+          fontSize: 11,
+        },
+        headerStyle: { backgroundColor: colors.background },
+        headerTintColor: colors.text,
+        headerTitleStyle: { fontFamily: 'Rubik_700Bold' },
+      }}
+    >
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: t('home.startSession'),
+          headerTitle: 'HoopCoach',
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="basketball" size={26} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="history"
+        options={{
+          title: t('history.title'),
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="time" size={26} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: t('profile.title'),
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="person" size={26} color={color} />
+          ),
+        }}
+      />
+    </Tabs>
+  );
+}
