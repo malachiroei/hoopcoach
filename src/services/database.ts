@@ -1,279 +1,233 @@
-import * as SQLite from 'expo-sqlite';
-import type { CourtCalibration, Highlight, Session, Shot, UserProfile } from '@/src/types';
+import { isSupabaseConfigured, supabase } from '@/src/lib/supabase';
+import { ensureAuthenticated } from '@/src/services/authService';
+import {
+  highlightRowToHighlight,
+  highlightToRow,
+  profileRowToUserProfile,
+  sessionRowToSession,
+  sessionToRow,
+  shotRowToShot,
+  shotToRow,
+  userProfileToRowUpdates,
+  type HighlightRow,
+  type ProfileRow,
+  type SessionRow,
+  type ShotRow,
+} from '@/src/services/supabaseMappers';
+import { getBadgeDisplayName, BADGE_DISPLAY_NAMES } from '@/src/constants/badges';
+import { generateUuid } from '@/src/utils/id';
+import type { Highlight, Session, Shot, UserProfile } from '@/src/types';
 
-let db: SQLite.SQLiteDatabase | null = null;
-
-export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
-  if (!db) {
-    db = await SQLite.openDatabaseAsync('hoopcoach.db');
-    await initSchema(db);
-  }
-  return db;
+/** @deprecated Use initDatabase() — kept for callers that awaited SQLite open. */
+export async function getDatabase(): Promise<void> {
+  await initDatabase();
 }
 
-async function initSchema(database: SQLite.SQLiteDatabase): Promise<void> {
-  await database.execAsync(`
-    PRAGMA journal_mode = WAL;
+export async function initDatabase(): Promise<void> {
+  if (!isSupabaseConfigured()) {
+    console.warn('Supabase not configured — database operations will fail');
+    return;
+  }
+  await ensureAuthenticated();
+}
 
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY NOT NULL,
-      started_at INTEGER NOT NULL,
-      ended_at INTEGER,
-      duration_seconds INTEGER DEFAULT 0,
-      total_shots INTEGER DEFAULT 0,
-      made_shots INTEGER DEFAULT 0,
-      xp_earned INTEGER DEFAULT 0
-    );
-
-    CREATE TABLE IF NOT EXISTS shots (
-      id TEXT PRIMARY KEY NOT NULL,
-      session_id TEXT NOT NULL,
-      made INTEGER NOT NULL,
-      zone TEXT NOT NULL,
-      timestamp INTEGER NOT NULL,
-      x REAL,
-      y REAL,
-      FOREIGN KEY (session_id) REFERENCES sessions(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS highlights (
-      id TEXT PRIMARY KEY NOT NULL,
-      session_id TEXT NOT NULL,
-      shot_id TEXT,
-      video_path TEXT,
-      reason TEXT NOT NULL,
-      timestamp INTEGER NOT NULL,
-      FOREIGN KEY (session_id) REFERENCES sessions(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS user_profile (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      name TEXT DEFAULT 'שחקן',
-      total_xp INTEGER DEFAULT 0,
-      onboarding_complete INTEGER DEFAULT 0,
-      court_calibration TEXT,
-      confidence_threshold REAL DEFAULT 0.5
-    );
-
-    CREATE TABLE IF NOT EXISTS badges (
-      id TEXT PRIMARY KEY NOT NULL,
-      earned_at INTEGER NOT NULL
-    );
-
-    INSERT OR IGNORE INTO user_profile (id) VALUES (1);
-  `);
+async function requireUserId(): Promise<string> {
+  if (!isSupabaseConfigured()) {
+    throw new Error('Supabase is not configured');
+  }
+  return ensureAuthenticated();
 }
 
 export async function getUserProfile(): Promise<UserProfile> {
-  const database = await getDatabase();
-  const row = await database.getFirstAsync<{
-    name: string;
-    total_xp: number;
-    onboarding_complete: number;
-    court_calibration: string | null;
-    confidence_threshold: number;
-  }>('SELECT * FROM user_profile WHERE id = 1');
+  const userId = await requireUserId();
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .maybeSingle();
 
-  return {
-    name: row?.name ?? 'שחקן',
-    totalXp: row?.total_xp ?? 0,
-    onboardingComplete: (row?.onboarding_complete ?? 0) === 1,
-    courtCalibration: row?.court_calibration
-      ? (JSON.parse(row.court_calibration) as CourtCalibration)
-      : undefined,
-    confidenceThreshold: row?.confidence_threshold ?? 0.5,
-  };
+  if (error) {
+    throw new Error(`Failed to load profile: ${error.message}`);
+  }
+
+  return profileRowToUserProfile(data as ProfileRow | null);
 }
 
 export async function updateUserProfile(updates: Partial<UserProfile>): Promise<void> {
-  const database = await getDatabase();
+  const userId = await requireUserId();
   const current = await getUserProfile();
+  const rowUpdates = userProfileToRowUpdates(updates, current);
 
-  await database.runAsync(
-    `UPDATE user_profile SET
-      name = ?,
-      total_xp = ?,
-      onboarding_complete = ?,
-      court_calibration = ?,
-      confidence_threshold = ?
-    WHERE id = 1`,
-    updates.name ?? current.name,
-    updates.totalXp ?? current.totalXp,
-    (updates.onboardingComplete ?? current.onboardingComplete) ? 1 : 0,
-    updates.courtCalibration
-      ? JSON.stringify(updates.courtCalibration)
-      : current.courtCalibration
-        ? JSON.stringify(current.courtCalibration)
-        : null,
-    updates.confidenceThreshold ?? current.confidenceThreshold
-  );
+  const { error } = await supabase.from('profiles').update(rowUpdates).eq('id', userId);
+  if (error) {
+    throw new Error(`Failed to update profile: ${error.message}`);
+  }
 }
 
 export async function insertSession(session: Session): Promise<void> {
-  const database = await getDatabase();
-  await database.runAsync(
-    `INSERT INTO sessions (id, started_at, ended_at, duration_seconds, total_shots, made_shots, xp_earned)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    session.id,
-    session.startedAt,
-    session.endedAt ?? null,
-    session.durationSeconds ?? 0,
-    session.totalShots,
-    session.madeShots,
-    session.xpEarned
-  );
+  const userId = await requireUserId();
+  const { error } = await supabase.from('sessions').insert(sessionToRow(session, userId));
+
+  if (error) {
+    throw new Error(`Failed to insert session: ${error.message}`);
+  }
 }
 
 export async function updateSession(session: Session): Promise<void> {
-  const database = await getDatabase();
-  await database.runAsync(
-    `UPDATE sessions SET
-      ended_at = ?,
-      duration_seconds = ?,
-      total_shots = ?,
-      made_shots = ?,
-      xp_earned = ?
-    WHERE id = ?`,
-    session.endedAt ?? null,
-    session.durationSeconds ?? 0,
-    session.totalShots,
-    session.madeShots,
-    session.xpEarned,
-    session.id
-  );
+  const userId = await requireUserId();
+  const { error } = await supabase
+    .from('sessions')
+    .update({
+      ended_at: session.endedAt ?? null,
+      duration_seconds: session.durationSeconds ?? 0,
+      total_shots: session.totalShots,
+      made_shots: session.madeShots,
+      xp_earned: session.xpEarned,
+    })
+    .eq('id', session.id)
+    .eq('user_id', userId);
+
+  if (error) {
+    throw new Error(`Failed to update session: ${error.message}`);
+  }
 }
 
 export async function getSession(id: string): Promise<Session | null> {
-  const database = await getDatabase();
-  const row = await database.getFirstAsync<{
-    id: string;
-    started_at: number;
-    ended_at: number | null;
-    duration_seconds: number;
-    total_shots: number;
-    made_shots: number;
-    xp_earned: number;
-  }>('SELECT * FROM sessions WHERE id = ?', id);
+  const userId = await requireUserId();
+  const { data, error } = await supabase
+    .from('sessions')
+    .select('*')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .maybeSingle();
 
-  if (!row) return null;
-  return {
-    id: row.id,
-    startedAt: row.started_at,
-    endedAt: row.ended_at ?? undefined,
-    durationSeconds: row.duration_seconds,
-    totalShots: row.total_shots,
-    madeShots: row.made_shots,
-    xpEarned: row.xp_earned,
-  };
+  if (error) {
+    throw new Error(`Failed to load session: ${error.message}`);
+  }
+
+  return data ? sessionRowToSession(data as SessionRow) : null;
 }
 
 export async function getAllSessions(): Promise<Session[]> {
-  const database = await getDatabase();
-  const rows = await database.getAllAsync<{
-    id: string;
-    started_at: number;
-    ended_at: number | null;
-    duration_seconds: number;
-    total_shots: number;
-    made_shots: number;
-    xp_earned: number;
-  }>('SELECT * FROM sessions ORDER BY started_at DESC');
+  const userId = await requireUserId();
+  const { data, error } = await supabase
+    .from('sessions')
+    .select('*')
+    .eq('user_id', userId)
+    .order('started_at', { ascending: false });
 
-  return rows.map((row) => ({
-    id: row.id,
-    startedAt: row.started_at,
-    endedAt: row.ended_at ?? undefined,
-    durationSeconds: row.duration_seconds,
-    totalShots: row.total_shots,
-    madeShots: row.made_shots,
-    xpEarned: row.xp_earned,
-  }));
+  if (error) {
+    throw new Error(`Failed to load sessions: ${error.message}`);
+  }
+
+  return (data as SessionRow[]).map(sessionRowToSession);
 }
 
 export async function insertShot(shot: Shot): Promise<void> {
-  const database = await getDatabase();
-  await database.runAsync(
-    `INSERT INTO shots (id, session_id, made, zone, timestamp, x, y)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    shot.id,
-    shot.sessionId,
-    shot.made ? 1 : 0,
-    shot.zone,
-    shot.timestamp,
-    shot.x ?? null,
-    shot.y ?? null
-  );
+  const userId = await requireUserId();
+  const { error } = await supabase.from('shots').insert(shotToRow(shot, userId));
+
+  if (error) {
+    throw new Error(`Failed to insert shot: ${error.message}`);
+  }
 }
 
 export async function getShotsForSession(sessionId: string): Promise<Shot[]> {
-  const database = await getDatabase();
-  const rows = await database.getAllAsync<{
-    id: string;
-    session_id: string;
-    made: number;
-    zone: string;
-    timestamp: number;
-    x: number | null;
-    y: number | null;
-  }>('SELECT * FROM shots WHERE session_id = ? ORDER BY timestamp ASC', sessionId);
+  const userId = await requireUserId();
+  const { data, error } = await supabase
+    .from('shots')
+    .select('*')
+    .eq('session_id', sessionId)
+    .eq('user_id', userId)
+    .order('timestamp', { ascending: true });
 
-  return rows.map((row) => ({
-    id: row.id,
-    sessionId: row.session_id,
-    made: row.made === 1,
-    zone: row.zone as Shot['zone'],
-    timestamp: row.timestamp,
-    x: row.x ?? undefined,
-    y: row.y ?? undefined,
-  }));
+  if (error) {
+    throw new Error(`Failed to load shots: ${error.message}`);
+  }
+
+  return (data as ShotRow[]).map(shotRowToShot);
 }
 
 export async function insertHighlight(highlight: Highlight): Promise<void> {
-  const database = await getDatabase();
-  await database.runAsync(
-    `INSERT INTO highlights (id, session_id, shot_id, video_path, reason, timestamp)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    highlight.id,
-    highlight.sessionId,
-    highlight.shotId ?? null,
-    highlight.videoPath ?? null,
-    highlight.reason,
-    highlight.timestamp
-  );
+  const userId = await requireUserId();
+  const { error } = await supabase.from('highlights').insert(highlightToRow(highlight, userId));
+
+  if (error) {
+    throw new Error(`Failed to insert highlight: ${error.message}`);
+  }
 }
 
 export async function getHighlightsForSession(sessionId: string): Promise<Highlight[]> {
-  const database = await getDatabase();
-  const rows = await database.getAllAsync<{
-    id: string;
-    session_id: string;
-    shot_id: string | null;
-    video_path: string | null;
-    reason: string;
-    timestamp: number;
-  }>('SELECT * FROM highlights WHERE session_id = ? ORDER BY timestamp ASC', sessionId);
+  const userId = await requireUserId();
+  const { data, error } = await supabase
+    .from('highlights')
+    .select('*')
+    .eq('session_id', sessionId)
+    .eq('user_id', userId)
+    .order('timestamp', { ascending: true });
 
-  return rows.map((row) => ({
-    id: row.id,
-    sessionId: row.session_id,
-    shotId: row.shot_id ?? undefined,
-    videoPath: row.video_path ?? undefined,
-    reason: row.reason as Highlight['reason'],
-    timestamp: row.timestamp,
-  }));
+  if (error) {
+    throw new Error(`Failed to load highlights: ${error.message}`);
+  }
+
+  return (data as HighlightRow[]).map(highlightRowToHighlight);
 }
 
 export async function earnBadge(badgeId: string): Promise<boolean> {
-  const database = await getDatabase();
-  const existing = await database.getFirstAsync('SELECT id FROM badges WHERE id = ?', badgeId);
-  if (existing) return false;
+  try {
+    const userId = await requireUserId();
+    const name = getBadgeDisplayName(badgeId);
 
-  await database.runAsync('INSERT INTO badges (id, earned_at) VALUES (?, ?)', badgeId, Date.now());
-  return true;
+    const { data: existing, error: lookupError } = await supabase
+      .from('badges')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('name', name)
+      .maybeSingle();
+
+    if (lookupError) {
+      console.warn(`Badge lookup skipped for ${badgeId}:`, lookupError.message);
+      return false;
+    }
+
+    if (existing) return false;
+
+    const { error } = await supabase.from('badges').insert({
+      id: generateUuid(),
+      user_id: userId,
+      name,
+      earned_at: Date.now(),
+    });
+
+    if (error) {
+      console.warn(`Failed to earn badge ${badgeId}:`, error.message);
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    console.warn(`Badge award skipped for ${badgeId}:`, error);
+    return false;
+  }
 }
 
 export async function getEarnedBadges(): Promise<string[]> {
-  const database = await getDatabase();
-  const rows = await database.getAllAsync<{ id: string }>('SELECT id FROM badges');
-  return rows.map((r) => r.id);
+  try {
+    const userId = await requireUserId();
+    const { data, error } = await supabase.from('badges').select('name').eq('user_id', userId);
+
+    if (error) {
+      console.warn('Failed to load badges:', error.message);
+      return [];
+    }
+
+    return (data ?? []).map((row) => {
+      const name = row.name as string;
+      const match = Object.entries(BADGE_DISPLAY_NAMES).find(([, label]) => label === name);
+      return match?.[0] ?? name;
+    });
+  } catch (error) {
+    console.warn('Badge load skipped:', error);
+    return [];
+  }
 }

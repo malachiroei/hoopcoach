@@ -4,7 +4,13 @@ const { getDefaultConfig } = require('expo/metro-config');
 /** @type {import('expo/metro-config').MetroConfig} */
 const config = getDefaultConfig(__dirname);
 
-// Bundle TFLite model files as static assets (no ESM / experimental resolver flags)
-config.resolver.assetExts.push('tflite');
+// Bundle TFLite weights via require('./model.tflite') — must be in assetExts, not sourceExts.
+const TFLITE_EXT = 'tflite';
+if (!config.resolver.assetExts.includes(TFLITE_EXT)) {
+  config.resolver.assetExts.push(TFLITE_EXT);
+}
+if (config.resolver.sourceExts.includes(TFLITE_EXT)) {
+  config.resolver.sourceExts = config.resolver.sourceExts.filter((ext) => ext !== TFLITE_EXT);
+}
 
 module.exports = config;

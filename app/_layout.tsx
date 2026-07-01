@@ -4,10 +4,11 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useEffect } from 'react';
 import { I18nManager, StatusBar, StyleSheet, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import '@/src/i18n';
-import { getDatabase } from '@/src/services/database';
+import { initDatabase } from '@/src/services/database';
 import { colors } from '@/src/theme';
 
 export { ErrorBoundary } from 'expo-router';
@@ -27,7 +28,7 @@ export default function RootLayout() {
   }, [error]);
 
   useEffect(() => {
-    getDatabase().catch(console.error);
+    initDatabase().catch(console.error);
   }, []);
 
   useEffect(() => {
@@ -39,7 +40,7 @@ export default function RootLayout() {
   if (!loaded) return null;
 
   return (
-    <View style={styles.root}>
+    <GestureHandlerRootView style={styles.root}>
       <StatusBar barStyle="light-content" backgroundColor={colors.background} />
       <Stack
         screenOptions={{
@@ -56,7 +57,7 @@ export default function RootLayout() {
         <Stack.Screen name="session" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'אודות' }} />
       </Stack>
-    </View>
+    </GestureHandlerRootView>
   );
 }
 

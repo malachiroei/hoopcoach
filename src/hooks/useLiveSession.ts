@@ -6,6 +6,29 @@ import { startMockDetection, stopMockDetection, getRandomMockZone } from '@/src/
 import { recordShotEvent } from '@/src/services/sessionService';
 import { statsService } from '@/src/services/statsService';
 
+function detectionsChanged(previous: DetectionBox[], next: DetectionBox[]): boolean {
+  if (previous.length !== next.length) {
+    return true;
+  }
+
+  for (let i = 0; i < next.length; i++) {
+    const a = previous[i];
+    const b = next[i];
+    if (
+      a.classId !== b.classId ||
+      Math.abs(a.x - b.x) > 2 ||
+      Math.abs(a.y - b.y) > 2 ||
+      Math.abs(a.width - b.width) > 2 ||
+      Math.abs(a.height - b.height) > 2 ||
+      Math.abs(a.confidence - b.confidence) > 0.05
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 interface UseLiveSessionOptions {
   calibration?: CourtCalibration;
   confidenceThreshold?: number;
@@ -13,7 +36,7 @@ interface UseLiveSessionOptions {
 }
 
 export function useLiveSession(options: UseLiveSessionOptions = {}) {
-  const { calibration, confidenceThreshold = 0.5, useMock = true } = options;
+  const { calibration, confidenceThreshold = 0.5, useMock = false } = options;
   const pipelineRef = useRef<DetectionPipeline | null>(null);
   const [detections, setDetections] = useState<DetectionBox[]>([]);
   const [detectorState, setDetectorState] = useState('idle');
@@ -35,6 +58,15 @@ export function useLiveSession(options: UseLiveSessionOptions = {}) {
     }
   }, []);
 
+  const handleDetectionsUpdate = useCallback((nextDetections: DetectionBox[]) => {
+    setDetections((previous) => {
+      if (nextDetections.length === 0 && previous.length === 0) {
+        return previous;
+      }
+      return detectionsChanged(previous, nextDetections) ? nextDetections : previous;
+    });
+  }, []);
+
   useEffect(() => {
     statsService.reset();
 
@@ -42,7 +74,7 @@ export function useLiveSession(options: UseLiveSessionOptions = {}) {
       calibration,
       confidenceThreshold,
       onShot: handleShot,
-      onDetections: setDetections,
+      onDetections: handleDetectionsUpdate,
       onStateChange: setDetectorState,
     });
 
@@ -69,7 +101,7 @@ export function useLiveSession(options: UseLiveSessionOptions = {}) {
       stopMockDetection();
       pipelineRef.current?.reset();
     };
-  }, [calibration, confidenceThreshold, handleShot, useMock]);
+  }, [calibration, confidenceThreshold, handleDetectionsUpdate, handleShot, useMock]);
 
   const processDetections = useCallback(
     (dets: DetectionBox[], frameWidth: number, frameHeight: number) => {

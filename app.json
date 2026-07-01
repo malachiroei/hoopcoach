@@ -23,6 +23,8 @@
       },
       "permissions": [
         "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ],
       "package": "com.hoopcoach.app"
@@ -61,7 +63,9 @@
             "targetSdkVersion": 34,
             "minSdkVersion": 24,
             "packagingOptions": {
-              "exclude": ["lib/riscv64/**"]
+              "exclude": [
+                "lib/riscv64/**"
+              ]
             }
           },
           "ios": {
@@ -80,6 +84,12 @@
       "eas": {
         "projectId": "783efe16-007b-4c12-8740-a46042d75297"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/783efe16-007b-4c12-8740-a46042d75297"
     }
   }
 }

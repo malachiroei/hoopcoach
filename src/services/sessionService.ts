@@ -81,11 +81,15 @@ export async function endSession(
   const profile = await getUserProfile();
   await updateUserProfile({ totalXp: profile.totalXp + xp });
 
-  await checkAndAwardBadges({
-    session: activeSession,
-    bestStreak: stats.bestStreak,
-    fgPercent: stats.fgPercent,
-  });
+  try {
+    await checkAndAwardBadges({
+      session: activeSession,
+      bestStreak: stats.bestStreak,
+      fgPercent: stats.fgPercent,
+    });
+  } catch (error) {
+    console.warn('Session saved; badge step failed:', error);
+  }
 
   const completed = { ...activeSession };
   activeSession = null;

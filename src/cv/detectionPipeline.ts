@@ -44,13 +44,8 @@ export class DetectionPipeline {
     this.onStateChange?.(state);
   }
 
-  processModelOutput(outputs: ArrayBuffer[]): void {
-    const detections = parseYoloOutput(
-      outputs,
-      this.frameWidth,
-      this.frameHeight,
-      DEFAULT_MODEL_CONFIG
-    );
+  processModelOutput(outputs: unknown): void {
+    const detections = parseYoloOutput(outputs, this.frameWidth, this.frameHeight, DEFAULT_MODEL_CONFIG);
     this.processDetections(detections);
   }
 

@@ -47,6 +47,9 @@ export class ShotDetector {
       case 'idle':
         if (this.hasBallDetected(filtered)) {
           this.state = 'ballDetected';
+        } else if (filtered.some((d) => d.classId === 'hoop')) {
+          // Hoop visible — arm tracker so a later ball frame can start a shot.
+          this.state = 'ballDetected';
         }
         break;
 
@@ -76,7 +79,12 @@ export class ShotDetector {
   }
 
   private hasBallDetected(detections: DetectionBox[]): boolean {
-    return detections.some((d) => d.classId === 'ball' || d.classId === 'player');
+    return detections.some(
+      (d) =>
+        d.classId === 'ball' ||
+        d.classId === 'player' ||
+        d.classId === 'ballInBasket'
+    );
   }
 
   private detectMakeFromTrajectory(): boolean {

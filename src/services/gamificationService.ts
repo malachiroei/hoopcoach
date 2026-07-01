@@ -29,27 +29,29 @@ export async function checkAndAwardBadges(params: {
   bestStreak: number;
   fgPercent: number;
 }): Promise<string[]> {
-  const { session, bestStreak, fgPercent } = params;
-  const newlyEarned: string[] = [];
+  try {
+    const { session, bestStreak, fgPercent } = params;
+    const newlyEarned: string[] = [];
 
-  if (await earnBadge('rookie')) newlyEarned.push('rookie');
+    if (await earnBadge('rookie')) newlyEarned.push('rookie');
 
-  if (bestStreak >= 10 && (await earnBadge('sniper'))) {
-    newlyEarned.push('sniper');
+    if (bestStreak >= 10 && (await earnBadge('sniper'))) {
+      newlyEarned.push('sniper');
+    }
+
+    if ((session.durationSeconds ?? 0) >= 3600 && (await earnBadge('marathon'))) {
+      newlyEarned.push('marathon');
+    }
+
+    if (fgPercent >= 80 && session.totalShots >= 10 && (await earnBadge('sharpshooter'))) {
+      newlyEarned.push('sharpshooter');
+    }
+
+    return newlyEarned;
+  } catch (error) {
+    console.warn('Badge awards skipped:', error);
+    return [];
   }
-
-  if (
-    (session.durationSeconds ?? 0) >= 3600 &&
-    (await earnBadge('marathon'))
-  ) {
-    newlyEarned.push('marathon');
-  }
-
-  if (fgPercent >= 80 && session.totalShots >= 10 && (await earnBadge('sharpshooter'))) {
-    newlyEarned.push('sharpshooter');
-  }
-
-  return newlyEarned;
 }
 
 export async function getBadgesWithStatus(): Promise<Badge[]> {

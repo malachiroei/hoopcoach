@@ -1,4 +1,5 @@
 import type { DetectionBox } from '@/src/types';
+import { ENABLE_MOCK_DETECTION } from '@/src/models/modelSource';
 
 const ZONES_FOR_MOCK = [
   'paint',
@@ -87,7 +88,7 @@ function generateMockFrame(made: boolean): DetectionBox[] {
 }
 
 export function isMockMode(): boolean {
-  return true;
+  return ENABLE_MOCK_DETECTION;
 }
 
 export function getRandomMockZone(): (typeof ZONES_FOR_MOCK)[number] {
