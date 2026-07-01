@@ -1,26 +1,31 @@
+import { forwardRef } from 'react';
 import { StyleSheet } from 'react-native';
 import { Camera, type CameraDevice } from 'react-native-vision-camera';
 
 interface PreviewCameraProps {
   device: CameraDevice;
   isActive?: boolean;
+  enablePhotoCapture?: boolean;
 }
 
 /**
- * Preview-only camera: one hardware preview stream, no frame processor.
- * `photo`/`video`/`audio` are false to avoid extra Android output streams
- * that trigger invalid-output-configuration on many devices.
+ * Preview camera used for cloud shot detection snapshots.
+ * Photo capture is enabled only while cloud detection is active.
  */
-export function PreviewCamera({ device, isActive = true }: PreviewCameraProps) {
+export const PreviewCamera = forwardRef<Camera, PreviewCameraProps>(function PreviewCamera(
+  { device, isActive = true, enablePhotoCapture = false },
+  ref
+) {
   return (
     <Camera
+      ref={ref}
       device={device}
       isActive={isActive}
       style={StyleSheet.absoluteFill}
-      photo={false}
+      photo={enablePhotoCapture}
       video={false}
       audio={false}
       androidPreviewViewType="texture-view"
     />
   );
-}
+});

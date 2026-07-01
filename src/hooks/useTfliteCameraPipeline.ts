@@ -1,64 +1,17 @@
-import { useCallback, useMemo } from 'react';
-import { useTensorflowModel } from 'react-native-fast-tflite';
-import { useFrameProcessor, runAtTargetFps } from 'react-native-vision-camera';
-import { useResizePlugin } from 'vision-camera-resize-plugin';
-import { Worklets } from 'react-native-worklets-core';
 import type { DetectionBox } from '@/src/types';
-import { MODEL_INPUT_SIZE, parseYoloOutput } from '@/src/cv/modelConfig';
 
+/**
+ * @deprecated Local on-device TFLite inference has been replaced by the
+ * Supabase `detect-shot` Edge Function. This stub is kept for API compatibility.
+ */
 export function useTfliteCameraPipeline(
-  modelAsset: number,
-  onDetections: (detections: DetectionBox[], frameWidth: number, frameHeight: number) => void,
-  enabled = true
+  _modelAsset: number,
+  _onDetections: (detections: DetectionBox[], frameWidth: number, frameHeight: number) => void,
+  _enabled = true
 ) {
-  const objectDetection = useTensorflowModel(modelAsset);
-  const model = objectDetection.state === 'loaded' ? objectDetection.model : undefined;
-  const { resize } = useResizePlugin();
-
-  const handleDetections = useCallback(
-    (outputs: ArrayBuffer[], frameWidth: number, frameHeight: number) => {
-      const detections = parseYoloOutput(outputs, frameWidth, frameHeight);
-      onDetections(detections, frameWidth, frameHeight);
-    },
-    [onDetections]
-  );
-
-  const runDetectionsOnJS = Worklets.createRunOnJS(handleDetections);
-
-  const frameProcessor = useFrameProcessor(
-    (frame) => {
-      'worklet';
-      if (!enabled || model == null) return;
-
-      runAtTargetFps(8, () => {
-        'worklet';
-        const resized = resize(frame, {
-          scale: { width: MODEL_INPUT_SIZE, height: MODEL_INPUT_SIZE },
-          pixelFormat: 'rgb',
-          dataType: 'uint8',
-        });
-
-        const inputBuffer = resized.buffer.slice(
-          resized.byteOffset,
-          resized.byteOffset + resized.byteLength
-        );
-
-        const inputArray = new Uint8Array(inputBuffer);
-        const outputs = model.runSync([inputArray]);
-        runDetectionsOnJS(outputs as unknown as ArrayBuffer[], frame.width, frame.height);
-      });
-    },
-    [model, enabled, runDetectionsOnJS, resize]
-  );
-
-  const activeFrameProcessor = model ? frameProcessor : undefined;
-
-  return useMemo(
-    () => ({
-      frameProcessor: activeFrameProcessor,
-      modelLoaded: objectDetection.state === 'loaded',
-      modelState: objectDetection.state,
-    }),
-    [activeFrameProcessor, objectDetection.state]
-  );
+  return {
+    frameProcessor: undefined,
+    modelLoaded: false,
+    modelState: 'missing' as const,
+  };
 }

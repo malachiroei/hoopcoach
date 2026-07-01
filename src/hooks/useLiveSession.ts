@@ -3,6 +3,10 @@ import * as Haptics from 'expo-haptics';
 import type { CourtCalibration, DetectionBox, ShotEvent } from '@/src/types';
 import { createDetectionPipeline, DetectionPipeline } from '@/src/cv/detectionPipeline';
 import { startMockDetection, stopMockDetection, getRandomMockZone } from '@/src/cv/mockDetector';
+import {
+  mapCloudDetectionToShotEvent,
+  type DetectShotResponse,
+} from '@/src/services/detectShotService';
 import { recordShotEvent } from '@/src/services/sessionService';
 import { statsService } from '@/src/services/statsService';
 
@@ -111,6 +115,22 @@ export function useLiveSession(options: UseLiveSessionOptions = {}) {
     []
   );
 
+  const processCloudShot = useCallback(
+    async (result: DetectShotResponse) => {
+      if (result.confidence < confidenceThreshold) {
+        return;
+      }
+
+      const event = mapCloudDetectionToShotEvent(result);
+      if (!event) {
+        return;
+      }
+
+      await handleShot(event);
+    },
+    [confidenceThreshold, handleShot]
+  );
+
   return {
     detections,
     detectorState,
@@ -118,5 +138,6 @@ export function useLiveSession(options: UseLiveSessionOptions = {}) {
     showSwish,
     setShowSwish,
     processDetections,
+    processCloudShot,
   };
 }

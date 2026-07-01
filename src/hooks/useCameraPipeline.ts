@@ -1,11 +1,10 @@
 import type { ReadonlyFrameProcessor } from 'react-native-vision-camera';
 import type { DetectionBox } from '@/src/types';
-import { isModelAssetBundled } from '@/src/models/modelSource';
 
 export type CameraPipelineResult = {
   frameProcessor: ReadonlyFrameProcessor | undefined;
   modelLoaded: boolean;
-  modelState: 'missing' | 'loading' | 'loaded' | 'error';
+  modelState: 'missing' | 'loading' | 'loaded' | 'error' | 'cloud';
 };
 
 export const MISSING_MODEL_PIPELINE: CameraPipelineResult = {
@@ -14,19 +13,22 @@ export const MISSING_MODEL_PIPELINE: CameraPipelineResult = {
   modelState: 'missing',
 };
 
+export const CLOUD_PIPELINE: CameraPipelineResult = {
+  frameProcessor: undefined,
+  modelLoaded: true,
+  modelState: 'cloud',
+};
+
 /**
- * Stub hook kept for API compatibility. TFLite hooks run inside
- * `CameraPipelineHost` only when `basketball_detector.tflite` is bundled.
+ * Legacy stub — on-device TFLite has been replaced by cloud `detect-shot`.
  */
 export function useCameraPipeline(
   _onDetections: (detections: DetectionBox[], frameWidth: number, frameHeight: number) => void,
   _enabled = true
 ): CameraPipelineResult {
-  return MISSING_MODEL_PIPELINE;
+  return CLOUD_PIPELINE;
 }
 
 export function isModelBundled(): boolean {
-  return isModelAssetBundled();
+  return false;
 }
-
-export { BASKETBALL_DETECTOR_MODEL } from '@/src/models/modelSource';

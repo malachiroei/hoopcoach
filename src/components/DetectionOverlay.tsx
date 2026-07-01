@@ -2,6 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { Orientation } from 'react-native-vision-camera';
 import type { DetectionBox } from '@/src/types';
+import type { DetectShotResponse } from '@/src/services/detectShotService';
 import { mapDetectionBoxToScreen } from '@/src/cv/coordinateMapping';
 import { colors } from '@/src/theme';
 
@@ -13,6 +14,7 @@ interface DetectionOverlayProps {
   displayHeight: number;
   orientation?: Orientation;
   isMirrored?: boolean;
+  cloudDetection?: DetectShotResponse | null;
 }
 
 const CLASS_COLORS: Record<DetectionBox['classId'], string> = {
@@ -33,6 +35,7 @@ export function DetectionOverlay({
   displayHeight,
   orientation = 'portrait',
   isMirrored = false,
+  cloudDetection = null,
 }: DetectionOverlayProps) {
   const frameLayout = {
     frameWidth,
@@ -44,12 +47,40 @@ export function DetectionOverlay({
   };
 
   const visibleDetections = detections.filter((d) => OVERLAY_CLASSES.has(d.classId));
+  const cloudAlertColor =
+    cloudDetection?.event === 'shot_made'
+      ? '#22C55E'
+      : cloudDetection?.event === 'shot_missed'
+        ? '#EF4444'
+        : '#F59E0B';
 
   return (
     <View
       style={[styles.container, { width: displayWidth, height: displayHeight }]}
       pointerEvents="box-none"
     >
+      {cloudDetection && (
+        <View
+          style={[styles.cloudAlert, { borderColor: cloudAlertColor }]}
+          pointerEvents="none"
+        >
+          <Text style={[styles.cloudAlertTitle, { color: cloudAlertColor }]}>
+            {cloudDetection.event === 'shot_made'
+              ? 'SHOT MADE'
+              : cloudDetection.event === 'shot_missed'
+                ? 'SHOT MISSED'
+                : 'NO SHOT'}
+          </Text>
+          <Text style={styles.cloudAlertText}>
+            {cloudDetection.observation}
+          </Text>
+          <Text style={styles.cloudAlertMeta}>
+            zone: {cloudDetection.zone ?? 'unknown'} | side: {cloudDetection.side ?? 'unknown'} |{' '}
+            {(cloudDetection.confidence * 100).toFixed(0)}%
+          </Text>
+        </View>
+      )}
+
       {__DEV__ && (
         <View style={styles.debugHud} pointerEvents="none">
           <Text style={styles.debugHudText}>
@@ -123,6 +154,34 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '700',
+  },
+  cloudAlert: {
+    position: 'absolute',
+    top: 180,
+    left: 16,
+    right: 16,
+    backgroundColor: 'rgba(0,0,0,0.82)',
+    borderWidth: 2,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    zIndex: 40,
+    elevation: 40,
+  },
+  cloudAlertTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  cloudAlertText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  cloudAlertMeta: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    marginTop: 6,
   },
   box: {
     position: 'absolute',
