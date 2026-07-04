@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { ResizeMode, Video } from 'expo-av';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ResizeMode, Video, type AVPlaybackStatus } from 'expo-av';
 import type { Highlight } from '@/src/types';
+import { filterPlayableHighlights } from '@/src/services/highlightService';
 import { colors, borderRadius, spacing } from '@/src/theme';
 
 interface HighlightPlayerProps {
@@ -9,20 +10,47 @@ interface HighlightPlayerProps {
 }
 
 export function HighlightPlayer({ highlights }: HighlightPlayerProps) {
-  const clipsWithVideo = highlights.filter((h) => h.videoPath);
+  const videoRef = useRef<Video>(null);
+  const [playableClips, setPlayableClips] = useState<Highlight[]>([]);
+  const [loading, setLoading] = useState(true);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
 
   useEffect(() => {
-    setCurrentIndex(0);
+    let active = true;
+
+    setLoading(true);
+    void filterPlayableHighlights(highlights).then((clips) => {
+      if (!active) {
+        return;
+      }
+      setPlayableClips(clips);
+      setCurrentIndex(0);
+      setPlaybackError(null);
+      setLoading(false);
+    });
+
+    return () => {
+      active = false;
+    };
   }, [highlights]);
 
-  if (clipsWithVideo.length === 0) {
+  if (loading) {
+    return (
+      <View style={styles.empty}>
+        <ActivityIndicator color={colors.primary} />
+        <Text style={styles.emptyLabel}>טוען היילייטס...</Text>
+      </View>
+    );
+  }
+
+  if (playableClips.length === 0) {
     return (
       <View style={styles.empty}>
         <Text style={styles.emptyText}>🎬</Text>
         <Text style={styles.emptyLabel}>
           {highlights.length > 0
-            ? `${highlights.length} מהלכים נשמרו`
+            ? 'אין קטעי וידאו תקינים — היילייטס נשמרים רק בפגיעות עם הקלטה מלאה'
             : 'אין היילייטס באימון זה'}
         </Text>
         {highlights.length > 0 && (
@@ -38,25 +66,63 @@ export function HighlightPlayer({ highlights }: HighlightPlayerProps) {
     );
   }
 
-  const current = clipsWithVideo[currentIndex];
+  const current = playableClips[currentIndex];
+
+  const handlePlaybackUpdate = (status: AVPlaybackStatus) => {
+    if (!status.isLoaded) {
+      if (status.error) {
+        setPlaybackError('לא ניתן להפעיל את הסרטון');
+      }
+      return;
+    }
+
+    if (status.didJustFinish && currentIndex < playableClips.length - 1) {
+      setCurrentIndex((index) => index + 1);
+      setPlaybackError(null);
+    }
+  };
 
   return (
     <View style={styles.container}>
+      <Text style={styles.reelTitle}>סרטון היילייטס</Text>
       <Video
+        key={current.videoPath}
+        ref={videoRef}
         source={{ uri: current.videoPath! }}
         style={styles.video}
         useNativeControls
         resizeMode={ResizeMode.CONTAIN}
         shouldPlay
-        onPlaybackStatusUpdate={(status) => {
-          if (status.isLoaded && status.didJustFinish && currentIndex < clipsWithVideo.length - 1) {
-            setCurrentIndex((i) => i + 1);
-          }
-        }}
+        isLooping={false}
+        onPlaybackStatusUpdate={handlePlaybackUpdate}
+        onError={() => setPlaybackError('שגיאה בהפעלת הווידאו')}
       />
-      <Text style={styles.counter}>
-        {currentIndex + 1} / {clipsWithVideo.length}
-      </Text>
+      {playbackError && <Text style={styles.errorText}>{playbackError}</Text>}
+      <View style={styles.controlsRow}>
+        <Pressable
+          style={[styles.navButton, currentIndex === 0 && styles.navButtonDisabled]}
+          disabled={currentIndex === 0}
+          onPress={() => setCurrentIndex((index) => Math.max(0, index - 1))}
+        >
+          <Text style={styles.navButtonText}>הקודם</Text>
+        </Pressable>
+        <Text style={styles.counter}>
+          {currentIndex + 1} / {playableClips.length}
+        </Text>
+        <Pressable
+          style={[
+            styles.navButton,
+            currentIndex >= playableClips.length - 1 && styles.navButtonDisabled,
+          ]}
+          disabled={currentIndex >= playableClips.length - 1}
+          onPress={() =>
+            setCurrentIndex((index) => Math.min(playableClips.length - 1, index + 1))
+          }
+        >
+          <Text style={styles.navButtonText}>הבא</Text>
+        </Pressable>
+      </View>
+      <Text style={styles.reasonText}>{getReasonLabel(current.reason)}</Text>
     </View>
   );
 }
@@ -79,13 +145,54 @@ const styles = StyleSheet.create({
   },
   video: {
     width: '100%',
-    height: 200,
+    height: 220,
+    backgroundColor: '#000',
+  },
+  reelTitle: {
+    color: colors.text,
+    fontSize: 14,
+    fontFamily: 'Rubik_700Bold',
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
+  },
+  controlsRow: {
+    flexDirection: 'row-reverse',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
   },
   counter: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontFamily: 'Rubik_600SemiBold',
+  },
+  navButton: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 8,
+    backgroundColor: colors.border,
+  },
+  navButtonDisabled: {
+    opacity: 0.4,
+  },
+  navButtonText: {
+    color: colors.text,
+    fontSize: 12,
+    fontFamily: 'Rubik_600SemiBold',
+  },
+  reasonText: {
     color: colors.textSecondary,
     textAlign: 'center',
     padding: spacing.sm,
     fontSize: 12,
+  },
+  errorText: {
+    color: colors.error,
+    textAlign: 'center',
+    paddingHorizontal: spacing.md,
+    fontSize: 12,
+    fontFamily: 'Rubik_600SemiBold',
   },
   empty: {
     backgroundColor: colors.surfaceElevated,
@@ -94,14 +201,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     minHeight: 120,
     justifyContent: 'center',
+    gap: spacing.sm,
   },
   emptyText: {
     fontSize: 40,
-    marginBottom: spacing.sm,
   },
   emptyLabel: {
     color: colors.textSecondary,
     fontSize: 14,
+    textAlign: 'center',
+    fontFamily: 'Rubik_400Regular',
   },
   highlightList: {
     marginTop: spacing.md,

@@ -44,32 +44,21 @@
           "backgroundColor": "#0A0A0F"
         }
       ],
-      [
-        "react-native-vision-camera",
-        {
-          "cameraPermissionText": "HoopCoach צריך גישה למצלמה כדי לעקוב אחרי הזריקות שלך.",
-          "enableMicrophonePermission": true,
-          "microphonePermissionText": "HoopCoach צריך גישה למיקרופון להקלטת היילייטס."
-        }
-      ],
       "expo-font",
       [
-        "expo-build-properties",
+        "expo-camera",
         {
-          "android": {
-            "kotlinVersion": "1.9.24",
-            "compileSdkVersion": 34,
-            "targetSdkVersion": 34,
-            "minSdkVersion": 24,
-            "packagingOptions": {
-              "exclude": [
-                "lib/riscv64/**"
-              ]
-            }
-          },
-          "ios": {
-            "deploymentTarget": "13.4"
-          }
+          "cameraPermission": "HoopCoach צריך גישה למצלמה כדי לעקוב אחרי הזריקות שלך.",
+          "microphonePermission": "HoopCoach צריך גישה למיקרופון להקלטת היילייטס (ללא שמע).",
+          "recordAudioAndroid": true
+        }
+      ],
+      "expo-sqlite",
+      "expo-web-browser",
+      [
+        "expo-screen-orientation",
+        {
+          "initialOrientation": "PORTRAIT"
         }
       ]
     ],

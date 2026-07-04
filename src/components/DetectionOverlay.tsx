@@ -1,200 +1,292 @@
-import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import type { Orientation } from 'react-native-vision-camera';
-import type { DetectionBox } from '@/src/types';
-import type { DetectShotResponse } from '@/src/services/detectShotService';
-import { mapDetectionBoxToScreen } from '@/src/cv/coordinateMapping';
+import { mapNormalizedBoxToCoverDisplay } from '@/src/cv/coordinateMapping';
+import type { CloudNormalizedBox, CloudPlayerBox, DetectShotResponse } from '@/src/services/detectShotService';
 import { colors } from '@/src/theme';
 
 interface DetectionOverlayProps {
-  detections: DetectionBox[];
-  frameWidth: number;
-  frameHeight: number;
+  cloudDetection: DetectShotResponse | null;
   displayWidth: number;
   displayHeight: number;
-  orientation?: Orientation;
-  isMirrored?: boolean;
-  cloudDetection?: DetectShotResponse | null;
+  frameWidth: number;
+  frameHeight: number;
+  showDebug?: boolean;
 }
 
-const CLASS_COLORS: Record<DetectionBox['classId'], string> = {
-  ball: '#FF6B00',
-  hoop: '#00D4AA',
-  ballInBasket: '#22C55E',
-  player: '#8B5CF6',
-};
+function boxToScreenRect(
+  box: CloudNormalizedBox,
+  frameWidth: number,
+  frameHeight: number,
+  displayWidth: number,
+  displayHeight: number,
+) {
+  if (frameWidth > 0 && frameHeight > 0) {
+    return mapNormalizedBoxToCoverDisplay(box, frameWidth, frameHeight, displayWidth, displayHeight);
+  }
+  return {
+    left: box.x * displayWidth,
+    top: box.y * displayHeight,
+    width: Math.max(box.width * displayWidth, 24),
+    height: Math.max(box.height * displayHeight, 24),
+  };
+}
 
-/** Classes shown on the debug overlay (hide rare false-positive ballInBasket). */
-const OVERLAY_CLASSES = new Set<DetectionBox['classId']>(['ball', 'hoop', 'player']);
+function BallMarker({
+  rect,
+}: {
+  rect: { left: number; top: number; width: number; height: number };
+}) {
+  const size = Math.max(rect.width, rect.height, 28);
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
 
-export function DetectionOverlay({
-  detections,
+  return (
+    <View
+      pointerEvents="none"
+      style={[
+        styles.ballCircle,
+        {
+          left: cx - size / 2,
+          top: cy - size / 2,
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+        },
+      ]}
+    />
+  );
+}
+
+function HoopMarker({
+  rect,
+}: {
+  rect: { left: number; top: number; width: number; height: number };
+}) {
+  const size = Math.max(rect.width, rect.height, 44);
+
+  return (
+    <View
+      pointerEvents="none"
+      style={[
+        styles.hoopSquare,
+        {
+          left: rect.left + rect.width / 2 - size / 2,
+          top: rect.top + rect.height / 2 - size / 2,
+          width: size,
+          height: size,
+        },
+      ]}
+    />
+  );
+}
+
+function PlayerMarker({
+  player,
   frameWidth,
   frameHeight,
   displayWidth,
   displayHeight,
-  orientation = 'portrait',
-  isMirrored = false,
-  cloudDetection = null,
-}: DetectionOverlayProps) {
-  const frameLayout = {
-    frameWidth,
-    frameHeight,
-    displayWidth,
-    displayHeight,
-    orientation,
-    isMirrored,
-  };
-
-  const visibleDetections = detections.filter((d) => OVERLAY_CLASSES.has(d.classId));
-  const cloudAlertColor =
-    cloudDetection?.event === 'shot_made'
-      ? '#22C55E'
-      : cloudDetection?.event === 'shot_missed'
-        ? '#EF4444'
-        : '#F59E0B';
+}: {
+  player: CloudPlayerBox;
+  frameWidth: number;
+  frameHeight: number;
+  displayWidth: number;
+  displayHeight: number;
+}) {
+  const rect = boxToScreenRect(player.box, frameWidth, frameHeight, displayWidth, displayHeight);
+  const label = `שחקן ${player.index}`;
 
   return (
     <View
-      style={[styles.container, { width: displayWidth, height: displayHeight }]}
-      pointerEvents="box-none"
+      pointerEvents="none"
+      style={[
+        styles.playerWrap,
+        {
+          left: rect.left,
+          top: rect.top,
+          width: Math.max(rect.width, 40),
+          height: Math.max(rect.height, 50),
+        },
+      ]}
     >
-      {cloudDetection && (
-        <View
-          style={[styles.cloudAlert, { borderColor: cloudAlertColor }]}
-          pointerEvents="none"
-        >
-          <Text style={[styles.cloudAlertTitle, { color: cloudAlertColor }]}>
-            {cloudDetection.event === 'shot_made'
-              ? 'SHOT MADE'
-              : cloudDetection.event === 'shot_missed'
-                ? 'SHOT MISSED'
-                : 'NO SHOT'}
+      <Text style={styles.playerLabel} numberOfLines={1}>
+        {label}
+      </Text>
+      <View style={styles.playerBox} />
+    </View>
+  );
+}
+
+export function DetectionOverlay({
+  cloudDetection,
+  displayWidth,
+  displayHeight,
+  frameWidth,
+  frameHeight,
+  showDebug = false,
+}: DetectionOverlayProps) {
+  if (!cloudDetection || displayWidth <= 0 || displayHeight <= 0) {
+    return null;
+  }
+
+  const liveBallBox = cloudDetection.ballBox ?? null;
+  const liveHoopBox = cloudDetection.hoopBox ?? null;
+  const livePlayers = cloudDetection.players ?? [];
+  const hasLiveBall = Boolean(liveBallBox);
+  const hasLiveHoop = Boolean(liveHoopBox);
+  const hasLivePlayers = livePlayers.length > 0;
+
+  const ballRect = hasLiveBall
+    ? boxToScreenRect(liveBallBox!, frameWidth, frameHeight, displayWidth, displayHeight)
+    : null;
+
+  const hoopRect = hasLiveHoop
+    ? boxToScreenRect(liveHoopBox!, frameWidth, frameHeight, displayWidth, displayHeight)
+    : null;
+
+  const statusText = cloudDetection.shotActive
+    ? cloudDetection.event === 'shot_made'
+      ? '✅ סל!'
+      : cloudDetection.event === 'shot_missed'
+        ? '❌ החטאה'
+        : '🏀 זריקה'
+    : hasLiveBall
+      ? 'מזהה כדור'
+      : 'מחפש כדור...';
+
+  return (
+    <View style={[StyleSheet.absoluteFill, { direction: 'ltr' }]} pointerEvents="none">
+      {hoopRect && <HoopMarker rect={hoopRect} />}
+
+      {ballRect && <BallMarker rect={ballRect} />}
+
+      {livePlayers.map((player) => (
+        <PlayerMarker
+          key={`p${player.index}-${Math.round(player.box.x * 10000)}-${Math.round(player.box.y * 10000)}`}
+          player={player}
+          frameWidth={frameWidth}
+          frameHeight={frameHeight}
+          displayWidth={displayWidth}
+          displayHeight={displayHeight}
+        />
+      ))}
+
+      <View style={styles.statusPill}>
+        <Text style={styles.statusText}>{statusText}</Text>
+        <View style={styles.detectionRow}>
+          <Text style={[styles.detectionChip, hasLiveBall ? styles.chipOn : styles.chipOff]}>
+            כדור {hasLiveBall ? '✓' : '—'}
           </Text>
-          <Text style={styles.cloudAlertText}>
+          <Text style={[styles.detectionChip, hasLiveHoop ? styles.chipOn : styles.chipOff]}>
+            סל {hasLiveHoop ? '✓' : '—'}
+          </Text>
+          <Text style={[styles.detectionChip, hasLivePlayers ? styles.chipOn : styles.chipOff]}>
+            שחקנים {hasLivePlayers ? livePlayers.length : '—'}
+          </Text>
+        </View>
+        {!hasLiveBall && !hasLiveHoop && (
+          <Text style={styles.hintText}>ממתין לזיהוי חי מהמצלמה...</Text>
+        )}
+        {showDebug && cloudDetection.observation && (
+          <Text style={styles.debugText} numberOfLines={2}>
             {cloudDetection.observation}
           </Text>
-          <Text style={styles.cloudAlertMeta}>
-            zone: {cloudDetection.zone ?? 'unknown'} | side: {cloudDetection.side ?? 'unknown'} |{' '}
-            {(cloudDetection.confidence * 100).toFixed(0)}%
-          </Text>
-        </View>
-      )}
-
-      {__DEV__ && (
-        <View style={styles.debugHud} pointerEvents="none">
-          <Text style={styles.debugHudText}>
-            overlay boxes: {visibleDetections.length}/{detections.length} | screen {displayWidth.toFixed(0)}x
-            {displayHeight.toFixed(0)} {displayWidth > displayHeight ? 'LAND' : 'PORT'}
-          </Text>
-          <Text style={styles.debugHudText}>
-            frame {frameWidth}x{frameHeight} {orientation}
-          </Text>
-          {visibleDetections.length > 0 && (
-            <Text style={styles.debugHudText}>
-              {visibleDetections.map((d) => `${d.classId} ${(d.confidence * 100).toFixed(0)}%`).join(' · ')}
-            </Text>
-          )}
-        </View>
-      )}
-
-      {visibleDetections.map((det, i) => {
-        const screenBox = mapDetectionBoxToScreen(det, frameLayout);
-        const borderColor = CLASS_COLORS[det.classId];
-
-        return (
-          <View
-            key={`${det.classId}-${i}`}
-            pointerEvents="none"
-            style={[
-              styles.box,
-              {
-                left: screenBox.left,
-                top: screenBox.top,
-                width: Math.max(screenBox.width, 8),
-                height: Math.max(screenBox.height, 8),
-                borderColor,
-                backgroundColor: `${borderColor}33`,
-              },
-            ]}
-          >
-            <Text style={[styles.label, { backgroundColor: borderColor }]}>
-              {det.classId} {(det.confidence * 100).toFixed(0)}%
-            </Text>
-          </View>
-        );
-      })}
+        )}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    direction: 'ltr',
-    zIndex: 20,
-    elevation: 20,
-  },
-  debugHud: {
-    position: 'absolute',
-    top: 140,
-    left: 12,
-    right: 12,
-    direction: 'ltr',
-    backgroundColor: 'rgba(0,0,0,0.75)',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    zIndex: 30,
-    elevation: 30,
-  },
-  debugHudText: {
-    color: '#FFFFFF',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  cloudAlert: {
-    position: 'absolute',
-    top: 180,
-    left: 16,
-    right: 16,
-    backgroundColor: 'rgba(0,0,0,0.82)',
-    borderWidth: 2,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    zIndex: 40,
-    elevation: 40,
-  },
-  cloudAlertTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    marginBottom: 4,
-  },
-  cloudAlertText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    lineHeight: 16,
-  },
-  cloudAlertMeta: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    marginTop: 6,
-  },
-  box: {
+  ballCircle: {
     position: 'absolute',
     borderWidth: 3,
+    borderColor: '#FF8C00',
+    backgroundColor: 'rgba(255, 140, 0, 0.3)',
   },
-  label: {
-    color: colors.text,
-    fontSize: 9,
-    fontWeight: '700',
-    paddingHorizontal: 4,
-    paddingVertical: 1,
+  hoopSquare: {
     position: 'absolute',
-    top: -14,
-    left: 0,
+    borderWidth: 3,
+    borderColor: '#22C55E',
+    backgroundColor: 'rgba(34, 197, 94, 0.2)',
+  },
+  playerWrap: {
+    position: 'absolute',
+    alignItems: 'center',
+  },
+  playerLabel: {
+    color: '#fff',
+    fontFamily: 'Rubik_700Bold',
+    fontSize: 12,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 6,
+    marginBottom: 2,
+    minWidth: 72,
+    textAlign: 'center',
+    overflow: 'hidden',
+  },
+  playerBox: {
+    flex: 1,
+    width: '100%',
+    borderWidth: 2,
+    borderColor: '#60A5FA',
+    borderStyle: 'dashed',
+    borderRadius: 4,
+    minHeight: 40,
+    backgroundColor: 'rgba(96, 165, 250, 0.12)',
+  },
+  statusPill: {
+    position: 'absolute',
+    top: 12,
+    left: 12,
+    maxWidth: '55%',
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    gap: 4,
+  },
+  statusText: {
+    color: colors.text,
+    fontFamily: 'Rubik_700Bold',
+    fontSize: 15,
+    textAlign: 'right',
+  },
+  detectionRow: {
+    flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+  },
+  detectionChip: {
+    fontFamily: 'Rubik_600SemiBold',
+    fontSize: 11,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    overflow: 'hidden',
+  },
+  chipOn: {
+    color: '#86EFAC',
+    backgroundColor: 'rgba(34,197,94,0.25)',
+  },
+  chipOff: {
+    color: '#FCA5A5',
+    backgroundColor: 'rgba(239,68,68,0.2)',
+  },
+  hintText: {
+    color: colors.textSecondary,
+    fontFamily: 'Rubik_400Regular',
+    fontSize: 10,
+    textAlign: 'right',
+    marginTop: 2,
+  },
+  debugText: {
+    color: colors.textSecondary,
+    fontFamily: 'Rubik_400Regular',
+    fontSize: 11,
+    marginTop: 4,
+    textAlign: 'right',
   },
 });

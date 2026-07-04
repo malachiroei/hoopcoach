@@ -47,8 +47,8 @@ export function useLiveSession(options: UseLiveSessionOptions = {}) {
   const [showSwish, setShowSwish] = useState(false);
   const [stats, setStats] = useState(statsService.getStats());
 
-  const handleShot = useCallback(async (event: ShotEvent) => {
-    const shot = await recordShotEvent(event);
+  const handleShot = useCallback(async (event: ShotEvent, sourceVideoUri?: string) => {
+    const shot = await recordShotEvent(event, sourceVideoUri);
     if (!shot) return;
 
     const newStats = statsService.addShot(shot);
@@ -116,8 +116,9 @@ export function useLiveSession(options: UseLiveSessionOptions = {}) {
   );
 
   const processCloudShot = useCallback(
-    async (result: DetectShotResponse) => {
-      if (result.confidence < confidenceThreshold) {
+    async (result: DetectShotResponse, sourceVideoUri?: string) => {
+      const cloudThreshold = Math.min(confidenceThreshold, 0.35);
+      if (result.confidence < cloudThreshold) {
         return;
       }
 
@@ -126,7 +127,7 @@ export function useLiveSession(options: UseLiveSessionOptions = {}) {
         return;
       }
 
-      await handleShot(event);
+      await handleShot(event, sourceVideoUri);
     },
     [confidenceThreshold, handleShot]
   );

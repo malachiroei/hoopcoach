@@ -1,20 +1,39 @@
 import { useEffect, useRef } from 'react';
-import * as FileSystem from 'expo-file-system';
-import type { Camera } from 'react-native-vision-camera';
+import type { CameraView } from 'expo-camera';
 import {
   invokeDetectShot,
+  type DetectShotMode,
   type DetectShotResponse,
 } from '@/src/services/detectShotService';
+import {
+  getBurstDelayMs,
+  pushCloudShotHistory,
+  resolveCountedShotEvent,
+  shouldCountCloudShot,
+  shouldEnterShotWatch,
+  shouldUseOutcomeMode,
+  toHistoryEntry,
+  type CloudShotHistoryEntry,
+} from '@/src/services/cloudShotTracker';
 
-const DEFAULT_INTERVAL_MS = 1500;
-const SHOT_COOLDOWN_MS = 2500;
+const SHOT_COOLDOWN_MS = 1200;
+const FRAME_BUFFER_SIZE = 3;
+const WATCH_DURATION_MS = 12_000;
+const DEFAULT_INTERVAL_MS = 250;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 interface UseCloudShotDetectionOptions {
-  cameraRef: React.RefObject<Camera | null>;
+  cameraRef: React.RefObject<CameraView | null>;
   enabled: boolean;
   confidenceThreshold?: number;
   intervalMs?: number;
-  onDetection: (result: DetectShotResponse) => void;
+  onDetection: (
+    result: DetectShotResponse,
+    frame?: { width: number; height: number },
+  ) => void;
   onShot: (result: DetectShotResponse) => void;
   onError?: (message: string) => void;
 }
@@ -28,82 +47,135 @@ export function useCloudShotDetection({
   onShot,
   onError,
 }: UseCloudShotDetectionOptions) {
-  const prevImageRef = useRef<string | null>(null);
-  const inFlightRef = useRef(false);
+  const frameBufferRef = useRef<string[]>([]);
   const lastShotAtRef = useRef(0);
+  const prevErrorRef = useRef<string | null>(null);
+  const lastErrorAtRef = useRef(0);
+  const historyRef = useRef<CloudShotHistoryEntry[]>([]);
+  const watchUntilRef = useRef(0);
 
   useEffect(() => {
     if (!enabled) {
-      prevImageRef.current = null;
+      frameBufferRef.current = [];
+      historyRef.current = [];
+      watchUntilRef.current = 0;
       return;
     }
 
     let cancelled = false;
 
-    const captureAndDetect = async () => {
-      if (cancelled || inFlightRef.current) {
-        return;
-      }
-
+    const captureAndDetect = async (): Promise<void> => {
       const camera = cameraRef.current;
-      if (!camera) {
+      if (!camera || cancelled) {
         return;
       }
-
-      inFlightRef.current = true;
 
       try {
-        const photo = await camera.takePhoto({
-          enableShutterSound: false,
-          flash: 'off',
+        const photo = await camera.takePictureAsync({
+          base64: true,
+          quality: 0.55,
+          shutterSound: false,
+          skipProcessing: true,
         });
 
-        const imageBase64 = await FileSystem.readAsStringAsync(photo.path, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+        if (!photo?.base64) {
+          throw new Error('Camera snapshot returned no base64 data');
+        }
 
-        await FileSystem.deleteAsync(photo.path, { idempotent: true }).catch(() => undefined);
+        const buffer = frameBufferRef.current;
+        const prevImageBase64 = buffer[buffer.length - 1];
+        const prevImage2Base64 = buffer[buffer.length - 2];
+        const watchActive = Date.now() < watchUntilRef.current;
+        const mode: DetectShotMode = watchActive ? 'outcome' : 'track';
 
         const result = await invokeDetectShot({
-          imageBase64,
-          prevImageBase64: prevImageRef.current ?? undefined,
+          imageBase64: photo.base64,
+          prevImageBase64,
+          prevImage2Base64,
+          mode,
+          screenMode: true,
         });
 
         if (cancelled) {
           return;
         }
 
-        prevImageRef.current = imageBase64;
-        onDetection(result);
+        frameBufferRef.current = [...buffer, photo.base64].slice(-FRAME_BUFFER_SIZE);
 
-        if (
-          result.event !== 'no_shot' &&
-          result.confidence >= confidenceThreshold
-        ) {
+        if (shouldEnterShotWatch(result)) {
+          watchUntilRef.current = Date.now() + WATCH_DURATION_MS;
+        } else if (!result.hoopVisible) {
+          watchUntilRef.current = 0;
+        }
+
+        onDetection(result, {
+          width: photo.width ?? 0,
+          height: photo.height ?? 0,
+        });
+
+        const historyEntry = toHistoryEntry(result);
+        historyRef.current = pushCloudShotHistory(historyRef.current, historyEntry);
+
+        if (shouldCountCloudShot(result, historyRef.current, confidenceThreshold)) {
           const now = Date.now();
           if (now - lastShotAtRef.current >= SHOT_COOLDOWN_MS) {
             lastShotAtRef.current = now;
-            onShot(result);
+            const countedResult = resolveCountedShotEvent(result, historyRef.current);
+            onShot(countedResult);
           }
         }
+
+        if (shouldUseOutcomeMode(result, Date.now() < watchUntilRef.current)) {
+          watchUntilRef.current = Date.now() + WATCH_DURATION_MS;
+        }
       } catch (error) {
-        console.error('CLOUD_DETECT_ERROR:', error);
         const message = error instanceof Error ? error.message : 'Cloud detection failed';
-        onError?.(message);
-      } finally {
-        inFlightRef.current = false;
+        if (
+          message.includes('Failed to capture image') ||
+          message.includes('not ready') ||
+          message.includes('recording')
+        ) {
+          return;
+        }
+
+        if (message !== prevErrorRef.current) {
+          prevErrorRef.current = message;
+          console.warn('CLOUD_DETECT_ERROR:', message);
+        }
+
+        const now = Date.now();
+        if (now - lastErrorAtRef.current >= 8000) {
+          lastErrorAtRef.current = now;
+          onError?.(message);
+        }
       }
     };
 
-    void captureAndDetect();
-    const timer = setInterval(() => {
-      void captureAndDetect();
-    }, intervalMs);
+    const runContinuousDetection = async () => {
+      while (!cancelled) {
+        const cycleStart = Date.now();
+        const watchActive = Date.now() < watchUntilRef.current;
+        await captureAndDetect();
+        if (cancelled) {
+          return;
+        }
+
+        const burstDelay = getBurstDelayMs(watchActive);
+        const elapsed = Date.now() - cycleStart;
+        const waitMs = Math.max(burstDelay, intervalMs - elapsed);
+        if (waitMs > 0) {
+          await delay(waitMs);
+        }
+      }
+    };
+
+    void runContinuousDetection();
 
     return () => {
       cancelled = true;
-      clearInterval(timer);
-      prevImageRef.current = null;
+      frameBufferRef.current = [];
+      historyRef.current = [];
+      watchUntilRef.current = 0;
     };
   }, [
     cameraRef,

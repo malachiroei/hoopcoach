@@ -8,7 +8,7 @@ import {
   updateUserProfile,
   getUserProfile,
 } from './database';
-import { recordHighlight } from './highlightService';
+import { recordHighlight, compileHighlightReel } from './highlightService';
 import { calculateXp, checkAndAwardBadges } from './gamificationService';
 
 let activeSession: Session | null = null;
@@ -33,7 +33,10 @@ export async function startSession(): Promise<Session> {
   return session;
 }
 
-export async function recordShotEvent(event: ShotEvent): Promise<Shot | null> {
+export async function recordShotEvent(
+  event: ShotEvent,
+  sourceVideoUri?: string
+): Promise<Shot | null> {
   if (!activeSession) return null;
 
   const shot: Shot = {
@@ -52,7 +55,7 @@ export async function recordShotEvent(event: ShotEvent): Promise<Shot | null> {
   if (event.made) activeSession.madeShots += 1;
 
   await updateSession(activeSession);
-  await recordHighlight(activeSession.id, shot, event.made);
+  await recordHighlight(activeSession.id, shot, event.made, sourceVideoUri);
 
   return shot;
 }
@@ -89,6 +92,12 @@ export async function endSession(
     });
   } catch (error) {
     console.warn('Session saved; badge step failed:', error);
+  }
+
+  try {
+    await compileHighlightReel(activeSession.id);
+  } catch (error) {
+    console.warn('Highlight reel compile failed:', error);
   }
 
   const completed = { ...activeSession };

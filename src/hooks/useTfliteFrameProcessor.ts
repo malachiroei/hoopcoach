@@ -1,11 +1,11 @@
-import type { Orientation } from 'react-native-vision-camera';
+import type { CameraOrientation } from '@/src/types';
 import type { DetectionBox } from '@/src/types';
 
 export interface FrameDetectionPayload {
   detections: DetectionBox[];
   frameWidth: number;
   frameHeight: number;
-  orientation: Orientation;
+  orientation: CameraOrientation;
   isMirrored: boolean;
 }
 

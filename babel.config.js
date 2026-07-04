@@ -3,7 +3,6 @@ module.exports = function (api) {
   return {
     presets: ['babel-preset-expo'],
     plugins: [
-      'react-native-worklets-core/plugin',
       // Must be listed last — https://docs.swmansion.com/react-native-reanimated/docs/fundamentals/getting-started
       'react-native-reanimated/plugin',
     ],

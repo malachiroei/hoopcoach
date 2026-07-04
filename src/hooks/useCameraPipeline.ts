@@ -1,8 +1,7 @@
-import type { ReadonlyFrameProcessor } from 'react-native-vision-camera';
 import type { DetectionBox } from '@/src/types';
 
 export type CameraPipelineResult = {
-  frameProcessor: ReadonlyFrameProcessor | undefined;
+  frameProcessor: undefined;
   modelLoaded: boolean;
   modelState: 'missing' | 'loading' | 'loaded' | 'error' | 'cloud';
 };

@@ -13,7 +13,7 @@ import { colors } from '@/src/theme';
 
 export { ErrorBoundary } from 'expo-router';
 
-SplashScreen.preventAutoHideAsync();
+SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
@@ -33,7 +33,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (loaded) {
-      SplashScreen.hideAsync();
+      SplashScreen.hideAsync().catch(() => {});
     }
   }, [loaded]);
 

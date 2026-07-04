@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, Text, View, ScrollView, Share } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Share, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
+import * as Sharing from 'expo-sharing';
 import Animated, { FadeInUp } from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from '@/src/components/Button';
 import { Card } from '@/src/components/Card';
 import { StatBadge } from '@/src/components/StatBadge';
@@ -10,7 +12,7 @@ import { ShotHeatMap } from '@/src/components/ShotHeatMap';
 import { RecommendationCard } from '@/src/components/RecommendationCard';
 import { HighlightPlayer } from '@/src/components/HighlightPlayer';
 import { getSession, getShotsForSession } from '@/src/services/database';
-import { getSessionHighlights } from '@/src/services/highlightService';
+import { getSessionHighlights, getShareableHighlightUri } from '@/src/services/highlightService';
 import { generateRecommendations } from '@/src/services/recommendationEngine';
 import { statsService } from '@/src/services/statsService';
 import { createEmptyZoneStats } from '@/src/services/sessionService';
@@ -20,6 +22,7 @@ import { colors, spacing, typography } from '@/src/theme';
 export default function SummaryScreen() {
   const { t } = useTranslation();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { sessionId } = useLocalSearchParams<{ sessionId: string }>();
   const [session, setSession] = useState<Session | null>(null);
   const [shots, setShots] = useState<Shot[]>([]);
@@ -56,14 +59,30 @@ export default function SummaryScreen() {
   }, [sessionId]);
 
   const handleShare = async () => {
-    if (!session) return;
+    if (!session || !sessionId) return;
     const fg = session.totalShots > 0
       ? Math.round((session.madeShots / session.totalShots) * 100)
       : 0;
 
-    await Share.share({
-      message: `🏀 סיכום אימון HoopCoach\n${session.madeShots}/${session.totalShots} זריקות · ${fg}%\n+${session.xpEarned} XP`,
-    });
+    const message = `🏀 סיכום אימון HoopCoach\n${session.madeShots}/${session.totalShots} זריקות · ${fg}%\n+${session.xpEarned} XP`;
+
+    try {
+      const videoUri = await getShareableHighlightUri(sessionId);
+
+      if (videoUri && (await Sharing.isAvailableAsync())) {
+        await Sharing.shareAsync(videoUri, {
+          mimeType: 'video/mp4',
+          dialogTitle: 'שיתוף היילייטס HoopCoach',
+          UTI: 'public.mpeg-4',
+        });
+        return;
+      }
+
+      await Share.share({ message });
+    } catch (error) {
+      console.warn('SHARE_ERROR:', error);
+      Alert.alert('שיתוף נכשל', 'לא ניתן לשתף את הסרטון כרגע. נסה שוב.');
+    }
   };
 
   if (!session) {
@@ -81,7 +100,13 @@ export default function SummaryScreen() {
   const durationMin = Math.floor((session.durationSeconds ?? 0) / 60);
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[
+        styles.content,
+        { paddingBottom: spacing.xxl + insets.bottom },
+      ]}
+    >
       <Animated.View entering={FadeInUp.delay(100)}>
         <Text style={styles.title}>{t('session.summary')}</Text>
         <Text style={styles.date}>

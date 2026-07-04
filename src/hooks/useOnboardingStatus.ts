@@ -6,10 +6,17 @@ export function useOnboardingStatus() {
   const [complete, setComplete] = useState(false);
 
   useEffect(() => {
-    getUserProfile().then((profile) => {
-      setComplete(profile.onboardingComplete);
-      setLoading(false);
-    });
+    getUserProfile()
+      .then((profile) => {
+        setComplete(profile.onboardingComplete);
+      })
+      .catch((error) => {
+        console.warn('Failed to load onboarding status:', error);
+        setComplete(false);
+      })
+      .finally(() => {
+        setLoading(false);
+      });
   }, []);
 
   return { loading, complete, setComplete };

@@ -39,6 +39,10 @@ async function requireUserId(): Promise<string> {
 }
 
 export async function getUserProfile(): Promise<UserProfile> {
+  if (!isSupabaseConfigured()) {
+    return profileRowToUserProfile(null);
+  }
+
   const userId = await requireUserId();
   const { data, error } = await supabase
     .from('profiles')
@@ -109,6 +113,10 @@ export async function getSession(id: string): Promise<Session | null> {
 }
 
 export async function getAllSessions(): Promise<Session[]> {
+  if (!isSupabaseConfigured()) {
+    return [];
+  }
+
   const userId = await requireUserId();
   const { data, error } = await supabase
     .from('sessions')

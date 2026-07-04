@@ -1,4 +1,4 @@
-import type { Orientation } from 'react-native-vision-camera';
+import type { CameraOrientation } from '@/src/types';
 import type { DetectionBox } from '@/src/types';
 
 export interface CameraFrameLayout {
@@ -6,7 +6,7 @@ export interface CameraFrameLayout {
   frameHeight: number;
   displayWidth: number;
   displayHeight: number;
-  orientation: Orientation;
+  orientation: CameraOrientation;
   isMirrored?: boolean;
 }
 
@@ -101,7 +101,7 @@ function mapWithCoverRotation(
   frameHeight: number,
   displayWidth: number,
   displayHeight: number,
-  orientation: Orientation,
+  orientation: CameraOrientation,
   isMirrored: boolean
 ): ScreenRect {
   const contentWidth = frameHeight;
@@ -186,4 +186,136 @@ export function mapDetectionBoxToScreen(
   }
 
   return result;
+}
+
+/** Map a 0–1 box (relative to captured image) onto a cover-fit camera preview. */
+export function mapNormalizedBoxToCoverDisplay(
+  box: { x: number; y: number; width: number; height: number },
+  imageWidth: number,
+  imageHeight: number,
+  displayWidth: number,
+  displayHeight: number,
+): ScreenRect {
+  if (
+    imageWidth <= 0 ||
+    imageHeight <= 0 ||
+    displayWidth <= 0 ||
+    displayHeight <= 0
+  ) {
+    return { left: 0, top: 0, width: 0, height: 0 };
+  }
+
+  const pixelBox: AxisAlignedBox = {
+    x: box.x * imageWidth,
+    y: box.y * imageHeight,
+    width: box.width * imageWidth,
+    height: box.height * imageHeight,
+  };
+
+  const imageAspect = imageWidth / imageHeight;
+  const displayAspect = displayWidth / displayHeight;
+
+  let scale: number;
+  let offsetX: number;
+  let offsetY: number;
+
+  if (imageAspect > displayAspect) {
+    scale = displayHeight / imageHeight;
+    const visibleWidth = displayWidth / scale;
+    offsetX = (imageWidth - visibleWidth) / 2;
+    offsetY = 0;
+  } else {
+    scale = displayWidth / imageWidth;
+    const visibleHeight = displayHeight / scale;
+    offsetX = 0;
+    offsetY = (imageHeight - visibleHeight) / 2;
+  }
+
+  const left = (pixelBox.x - offsetX) * scale;
+  const top = (pixelBox.y - offsetY) * scale;
+  const width = pixelBox.width * scale;
+  const height = pixelBox.height * scale;
+
+  return clipRectToDisplay(left, top, width, height, displayWidth, displayHeight);
+}
+
+export function getCoverTransform(
+  imageWidth: number,
+  imageHeight: number,
+  displayWidth: number,
+  displayHeight: number,
+): { scale: number; offsetX: number; offsetY: number } {
+  const imageAspect = imageWidth / imageHeight;
+  const displayAspect = displayWidth / displayHeight;
+
+  if (imageAspect > displayAspect) {
+    const scale = displayHeight / imageHeight;
+    return {
+      scale,
+      offsetX: (imageWidth - displayWidth / scale) / 2,
+      offsetY: 0,
+    };
+  }
+
+  const scale = displayWidth / imageWidth;
+  return {
+    scale,
+    offsetX: 0,
+    offsetY: (imageHeight - displayHeight / scale) / 2,
+  };
+}
+
+export function mapDisplayPointToNormalized(
+  displayX: number,
+  displayY: number,
+  imageWidth: number,
+  imageHeight: number,
+  displayWidth: number,
+  displayHeight: number,
+): { x: number; y: number } {
+  if (
+    imageWidth <= 0 ||
+    imageHeight <= 0 ||
+    displayWidth <= 0 ||
+    displayHeight <= 0
+  ) {
+    return { x: 0.5, y: 0.5 };
+  }
+
+  const { scale, offsetX, offsetY } = getCoverTransform(
+    imageWidth,
+    imageHeight,
+    displayWidth,
+    displayHeight,
+  );
+
+  const imageX = displayX / scale + offsetX;
+  const imageY = displayY / scale + offsetY;
+
+  return {
+    x: Math.max(0, Math.min(1, imageX / imageWidth)),
+    y: Math.max(0, Math.min(1, imageY / imageHeight)),
+  };
+}
+
+export function mapNormalizedCenterToDisplay(
+  cx: number,
+  cy: number,
+  size: number,
+  imageWidth: number,
+  imageHeight: number,
+  displayWidth: number,
+  displayHeight: number,
+): { left: number; top: number } {
+  const rect = mapNormalizedBoxToCoverDisplay(
+    { x: cx - size / 2, y: cy - size / 2, width: size, height: size },
+    imageWidth,
+    imageHeight,
+    displayWidth,
+    displayHeight,
+  );
+  return {
+    left: rect.left + rect.width / 2,
+    top: rect.top + rect.height / 2,
+  };
 }

@@ -10,7 +10,6 @@ import {
   type LayoutChangeEvent,
   type GestureResponderEvent,
 } from 'react-native';
-import { useCameraDevice } from 'react-native-vision-camera';
 import { useIsFocused } from '@react-navigation/native';
 import { PreviewCamera } from '@/src/components/PreviewCamera';
 import { BasketballHalfCourtOverlay } from '@/src/components/BasketballHalfCourtOverlay';
@@ -79,9 +78,8 @@ export function CourtCalibrationView({
   const courtRef = useRef<View>(null);
   const courtSizeRef = useRef<CourtSize>(getCourtBounds());
   const courtBounds = getCourtBounds();
-  const device = useCameraDevice('back');
   const isFocused = useIsFocused();
-  const showCamera = cameraEnabled && device != null;
+  const showCamera = cameraEnabled;
 
   const handleCourtLayout = useCallback(
     (event: LayoutChangeEvent) => {
@@ -145,7 +143,7 @@ export function CourtCalibrationView({
     >
       <View style={styles.cameraLayer} pointerEvents="none">
         {showCamera ? (
-          <PreviewCamera device={device} isActive={isFocused} />
+          <PreviewCamera isActive={isFocused} />
         ) : (
           <View style={[StyleSheet.absoluteFill, styles.cameraLoading]}>
             <ActivityIndicator color={colors.primary} />

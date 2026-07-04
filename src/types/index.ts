@@ -1,3 +1,5 @@
+export type CameraOrientation = 'portrait' | 'landscape-left' | 'landscape-right' | 'portrait-upside-down';
+
 export type CourtZone =
   | 'paint'
   | 'midLeft'
@@ -17,6 +19,23 @@ export interface Point2D {
 export interface CourtCalibration {
   points: Point2D[];
   calibratedAt: number;
+}
+
+/** User-confirmed ball/hoop anchors (normalized 0–1 in camera image). */
+export interface TargetAnchor {
+  cx: number;
+  cy: number;
+  size: number;
+}
+
+export interface SessionTargets {
+  ball: TargetAnchor;
+  hoop: TargetAnchor;
+  /** Screen-normalized anchors from user calibration (0–1). */
+  displayBall: TargetAnchor;
+  displayHoop: TargetAnchor;
+  frameWidth: number;
+  frameHeight: number;
 }
 
 export interface Session {

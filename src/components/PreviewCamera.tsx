@@ -1,31 +1,27 @@
 import { forwardRef } from 'react';
 import { StyleSheet } from 'react-native';
-import { Camera, type CameraDevice } from 'react-native-vision-camera';
+import { CameraView, type CameraViewProps } from 'expo-camera';
 
 interface PreviewCameraProps {
-  device: CameraDevice;
   isActive?: boolean;
   enablePhotoCapture?: boolean;
+  enableVideoCapture?: boolean;
 }
 
 /**
- * Preview camera used for cloud shot detection snapshots.
- * Photo capture is enabled only while cloud detection is active.
+ * Expo Go compatible camera for cloud snapshots and on-demand highlight clips.
  */
-export const PreviewCamera = forwardRef<Camera, PreviewCameraProps>(function PreviewCamera(
-  { device, isActive = true, enablePhotoCapture = false },
+export const PreviewCamera = forwardRef<CameraView, PreviewCameraProps>(function PreviewCamera(
+  { isActive = true, enablePhotoCapture = false, enableVideoCapture = false },
   ref
 ) {
-  return (
-    <Camera
-      ref={ref}
-      device={device}
-      isActive={isActive}
-      style={StyleSheet.absoluteFill}
-      photo={enablePhotoCapture}
-      video={false}
-      audio={false}
-      androidPreviewViewType="texture-view"
-    />
-  );
+  const cameraProps: CameraViewProps = {
+    facing: 'back',
+    style: StyleSheet.absoluteFill,
+    active: isActive,
+    mute: true,
+    mode: enableVideoCapture ? 'video' : enablePhotoCapture ? 'picture' : undefined,
+  };
+
+  return <CameraView ref={ref} {...cameraProps} />;
 });
