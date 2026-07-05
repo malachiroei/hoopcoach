@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   StyleSheet,
   Text,
@@ -6,42 +6,40 @@ import {
   Pressable,
   Modal,
   useWindowDimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useIsFocused } from '@react-navigation/native';
 import { useTranslation } from 'react-i18next';
 import * as ScreenOrientation from 'expo-screen-orientation';
-import { useCameraPermissions, useMicrophonePermissions, type CameraView } from 'expo-camera';
+import * as FileSystem from 'expo-file-system/legacy';
+import { useCameraPermission } from 'react-native-vision-camera';
 import { Button } from '@/src/components/Button';
-import { PreviewCamera } from '@/src/components/PreviewCamera';
-import { DetectionOverlay } from '@/src/components/DetectionOverlay';
+import { InferenceCamera, type InferenceCameraRef } from '@/src/components/InferenceCamera';
+import { LocalDetectionOverlay } from '@/src/components/LocalDetectionOverlay';
 import { TargetCalibrationView } from '@/src/components/TargetCalibrationView';
 import { SwishEffect } from '@/src/components/SwishEffect';
 import { useLiveSession } from '@/src/hooks/useLiveSession';
-import { useCloudShotDetection } from '@/src/hooks/useCloudShotDetection';
-import { isSupabaseConfigured } from '@/src/lib/supabase';
-import type { DetectShotResponse } from '@/src/services/detectShotService';
-import { invokeDetectShot } from '@/src/services/detectShotService';
+import { useCameraPipeline } from '@/src/hooks/useCameraPipeline';
+import type { FrameDetectionPayload } from '@/src/hooks/useTfliteFrameProcessor';
+import { DetectionSmoother, pickBestDetection } from '@/src/cv/detectionSmoother';
+import { getEffectiveFrameSize } from '@/src/cv/coordinateMapping';
 import { startSession, endSession, getSessionDuration } from '@/src/services/sessionService';
-import { initHighlightBuffer, clearHighlightBuffer, saveManualHighlight } from '@/src/services/highlightService';
-import { useOnDemandHighlightCapture } from '@/src/hooks/useOnDemandHighlightCapture';
+import { initHighlightBuffer, clearHighlightBuffer } from '@/src/services/highlightService';
 import { getUserProfile } from '@/src/services/database';
 import {
-  applySessionTargetsForShots,
-  boxToAnchor,
   buildSessionTargets,
   DEFAULT_BALL_ANCHOR,
   DEFAULT_HOOP_ANCHOR,
 } from '@/src/services/sessionTargets';
 import {
-  filterCloudDetection,
-  smoothCloudDetection,
-  toFriendlyDetectError,
-} from '@/src/services/cloudDetectionFilter';
-import type { SessionTargets, TargetAnchor } from '@/src/types';
+  ACTIVE_MODEL_FILENAME,
+  ACTIVE_MODEL_KIND_RESOLVED,
+  isModelAssetBundled,
+  MODEL_BUNDLE_ERROR,
+} from '@/src/models/modelSource';
+import type { DetectionBox, SessionTargets, TargetAnchor } from '@/src/types';
 import { colors, spacing, typography } from '@/src/theme';
-
-const CLOUD_DETECT_INTERVAL_MS = 250;
 
 type SessionPhase = 'preview' | 'scanning' | 'confirm' | 'running';
 
@@ -51,40 +49,60 @@ interface CalibrationSnapshot {
   hoop: TargetAnchor;
 }
 
-function normalizeFrameSize(
-  frame: { width: number; height: number },
-  displayWidth: number,
-  displayHeight: number,
-): { width: number; height: number } {
-  if (frame.width <= 0 || frame.height <= 0) {
-    return frame;
-  }
-
-  const frameLandscape = frame.width > frame.height;
-  const displayLandscape = displayWidth > displayHeight;
-
-  if (frameLandscape !== displayLandscape) {
-    return { width: frame.height, height: frame.width };
-  }
-
-  return frame;
-}
-
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
+function detectionToAnchor(det: DetectionBox, frameWidth: number, frameHeight: number): TargetAnchor {
+  const cx = (det.x + det.width / 2) / frameWidth;
+  const cy = (det.y + det.height / 2) / frameHeight;
+  const size = Math.max(det.width / frameWidth, det.height / frameHeight, 0.03);
+  return { cx, cy, size };
+}
+
+function anchorToDetectionBox(
+  anchor: TargetAnchor,
+  frameWidth: number,
+  frameHeight: number,
+  classId: DetectionBox['classId'] = 'hoop',
+): DetectionBox {
+  const pxSize = anchor.size * Math.max(frameWidth, frameHeight);
+  const cx = anchor.cx * frameWidth;
+  const cy = anchor.cy * frameHeight;
+  return {
+    x: cx - pxSize / 2,
+    y: cy - pxSize / 2,
+    width: pxSize,
+    height: pxSize,
+    confidence: 1,
+    classId,
+  };
+}
+
+function mergeWithCalibratedHoop(
+  detections: DetectionBox[],
+  targets: SessionTargets | null,
+  frameWidth: number,
+  frameHeight: number,
+): DetectionBox[] {
+  if (!targets || frameWidth <= 0 || frameHeight <= 0) {
+    return detections;
+  }
+
+  const withoutHoop = detections.filter((d) => d.classId !== 'hoop');
+  return [...withoutHoop, anchorToDetectionBox(targets.hoop, frameWidth, frameHeight, 'hoop')];
+}
+
 export default function LiveSessionScreen() {
   const { t } = useTranslation();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
   const router = useRouter();
-  const [permission, requestPermission] = useCameraPermissions();
-  const [micPermission, requestMicPermission] = useMicrophonePermissions();
-  const hasPermission = permission?.granted ?? false;
+  const { hasPermission, requestPermission } = useCameraPermission();
   const isFocused = useIsFocused();
-  const cameraRef = useRef<CameraView>(null);
+  const cameraRef = useRef<InferenceCameraRef>(null);
+  const smootherRef = useRef(new DetectionSmoother());
 
   const [debugMode, setDebugMode] = useState(__DEV__);
   const [useMock, setUseMock] = useState(false);
@@ -96,146 +114,76 @@ export default function LiveSessionScreen() {
   const [confidenceThreshold, setConfidenceThreshold] = useState(0.5);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [isEnding, setIsEnding] = useState(false);
-  const [cloudDetection, setCloudDetection] = useState<DetectShotResponse | null>(null);
-  const [frameSize, setFrameSize] = useState({ width: 0, height: 0 });
-  const [cloudDetectError, setCloudDetectError] = useState<string | null>(null);
-  const cloudDetectionRef = useRef<DetectShotResponse | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [highlightRecording, setHighlightRecording] = useState(false);
+  const [overlayDetections, setOverlayDetections] = useState<DetectionBox[]>([]);
+  const [frameLayout, setFrameLayout] = useState({
+    width: 0,
+    height: 0,
+    orientation: 'landscape-left' as const,
+    isMirrored: false,
+  });
+  const [pipelineError, setPipelineError] = useState<string | null>(null);
 
-  const supabaseReady = isSupabaseConfigured();
-  const cameraActive = sessionPhase !== 'confirm';
+  const modelBundled = isModelAssetBundled();
   const isRunning = sessionPhase === 'running';
+  const isPreview = sessionPhase === 'preview';
+  const cameraActive = sessionPhase !== 'confirm';
   const cameraSessionActive = isFocused && cameraActive && !isEnding;
-  const cloudDetectionActive =
-    supabaseReady && !useMock && isRunning && cameraSessionActive && !showEndConfirm;
-  const highlightCaptureActive = cloudDetectionActive;
-  const cloudDetectionEnabled = cloudDetectionActive && !highlightRecording;
-  const calibrationPhotoMode = sessionPhase === 'preview' || sessionPhase === 'scanning';
+  const inferenceEnabled = modelBundled && !useMock && cameraSessionActive && !showEndConfirm;
 
-  const { stats, showSwish, setShowSwish, processCloudShot } = useLiveSession({
-    confidenceThreshold,
-    useMock,
-  });
+  const { stats, showSwish, setShowSwish, processDetections } = useLiveSession({
+      confidenceThreshold,
+      useMock,
+    });
 
-  const {
-    tryStartAttemptCapture,
-    finalizeMadeCapture,
-    cancelAttemptCapture,
-    salvageAttemptClip,
-  } = useOnDemandHighlightCapture({
-    cameraRef,
-    onRecordingStateChange: setHighlightRecording,
-  });
-
-  const handleCloudDetection = useCallback(
-    (result: DetectShotResponse, frame?: { width: number; height: number }) => {
+  const handleFrameDetections = useCallback(
+    (payload: FrameDetectionPayload) => {
       if (isEnding || showEndConfirm) {
         return;
       }
 
-      setCloudDetectError(null);
-
-      if (frame && frame.width > 0 && frame.height > 0) {
-        setFrameSize(normalizeFrameSize(frame, screenWidth, screenHeight));
+      const frameWidth = payload.frameWidth;
+      const frameHeight = payload.frameHeight;
+      if (frameWidth > 0 && frameHeight > 0) {
+        setFrameLayout({
+          width: getEffectiveFrameSize(frameWidth, frameHeight, screenWidth, screenHeight).width,
+          height: getEffectiveFrameSize(frameWidth, frameHeight, screenWidth, screenHeight).height,
+          orientation: payload.orientation,
+          isMirrored: payload.isMirrored,
+        });
       }
 
-      const filtered = filterCloudDetection(result);
-      const smoothed = smoothCloudDetection(cloudDetectionRef.current, filtered);
-      cloudDetectionRef.current = smoothed;
-      setCloudDetection(smoothed);
+      const smoothed = smootherRef.current.smooth(payload.detections);
+      const displayDetections = mergeWithCalibratedHoop(
+        smoothed,
+        sessionTargets,
+        frameWidth,
+        frameHeight,
+      );
 
-      if (!highlightCaptureActive) {
-        return;
-      }
+      setOverlayDetections(displayDetections);
 
-      if (
-        smoothed.shotPhase === 'attempt' ||
-        smoothed.shotActive ||
-        (smoothed.ballVisible && smoothed.hoopVisible && smoothed.shotPhase === 'outcome')
-      ) {
-        void tryStartAttemptCapture();
+      if (sessionPhase === 'running') {
+        processDetections(smoothed, frameWidth, frameHeight);
       }
     },
-    [
-      highlightCaptureActive,
-      isEnding,
-      screenHeight,
-      screenWidth,
-      showEndConfirm,
-      tryStartAttemptCapture,
-    ]
+    [isEnding, processDetections, screenHeight, screenWidth, sessionPhase, sessionTargets, showEndConfirm],
   );
 
-  const handleCloudDetectError = useCallback((message: string) => {
-    const friendly = toFriendlyDetectError(message);
-    if (friendly) {
-      setCloudDetectError(friendly);
-    }
-  }, []);
-
-  const handleCloudShot = useCallback(
-    async (result: DetectShotResponse) => {
-      if (isEnding || showEndConfirm) {
-        return;
-      }
-
-      if (result.event === 'shot_missed') {
-        const clipUri = await salvageAttemptClip();
-        if (clipUri && sessionId) {
-          await saveManualHighlight(sessionId, clipUri);
-        } else {
-          await cancelAttemptCapture();
-        }
-        await processCloudShot(applySessionTargetsForShots(result, sessionTargets));
-        return;
-      }
-
-      let videoUri: string | null = null;
-      if (result.event === 'shot_made' && highlightCaptureActive) {
-        if (!highlightRecording) {
-          await tryStartAttemptCapture();
-        }
-        videoUri = await finalizeMadeCapture();
-        if (!videoUri) {
-          videoUri = await salvageAttemptClip();
-        }
-      }
-
-      await processCloudShot(applySessionTargetsForShots(result, sessionTargets), videoUri ?? undefined);
-    },
-    [
-      cancelAttemptCapture,
-      finalizeMadeCapture,
-      highlightCaptureActive,
-      highlightRecording,
-      isEnding,
-      processCloudShot,
-      salvageAttemptClip,
-      sessionId,
-      sessionTargets,
-      showEndConfirm,
-      tryStartAttemptCapture,
-    ]
-  );
-
-  useCloudShotDetection({
-    cameraRef,
-    enabled: cloudDetectionEnabled,
-    confidenceThreshold,
-    intervalMs: CLOUD_DETECT_INTERVAL_MS,
-    onDetection: handleCloudDetection,
-    onShot: handleCloudShot,
-    onError: handleCloudDetectError,
-  });
+  const pipeline = useCameraPipeline(handleFrameDetections, inferenceEnabled);
 
   useEffect(() => {
-    if (!cloudDetectError) {
+    if (pipeline.modelState === 'error') {
+      setPipelineError('שגיאה בטעינת מודל TFLite — הרץ prebuild מחדש');
       return;
     }
-    const timer = setTimeout(() => setCloudDetectError(null), 4000);
-    return () => clearTimeout(timer);
-  }, [cloudDetectError]);
+    if (pipeline.modelState === 'missing') {
+      setPipelineError(MODEL_BUNDLE_ERROR);
+      return;
+    }
+    if (pipeline.modelLoaded) {
+      setPipelineError(null);
+    }
+  }, [pipeline.modelLoaded, pipeline.modelState]);
 
   useEffect(() => {
     async function lockLandscape() {
@@ -245,9 +193,7 @@ export default function LiveSessionScreen() {
         console.warn('ORIENTATION_LOCK_ERROR:', error);
       }
     }
-
     void lockLandscape();
-
     return () => {
       void ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP).catch(
         () => undefined,
@@ -256,16 +202,10 @@ export default function LiveSessionScreen() {
   }, []);
 
   useEffect(() => {
-    if (!permission?.granted) {
+    if (!hasPermission) {
       void requestPermission();
     }
-  }, [permission?.granted, requestPermission]);
-
-  useEffect(() => {
-    if (highlightCaptureActive && !micPermission?.granted) {
-      void requestMicPermission();
-    }
-  }, [highlightCaptureActive, micPermission?.granted, requestMicPermission]);
+  }, [hasPermission, requestPermission]);
 
   useEffect(() => {
     getUserProfile().then((profile) => {
@@ -281,7 +221,6 @@ export default function LiveSessionScreen() {
     let active = true;
     startSession().then((session) => {
       if (active) {
-        setSessionId(session.id);
         initHighlightBuffer(session.id);
       }
     });
@@ -303,48 +242,33 @@ export default function LiveSessionScreen() {
     }
 
     setSessionPhase('scanning');
-    setCloudDetectError(null);
 
     try {
-      const photo = await cameraRef.current.takePictureAsync({
-        base64: true,
-        quality: 0.85,
-        shutterSound: false,
-        skipProcessing: true,
+      const photo = await cameraRef.current.takePhoto({ enableShutterSound: false });
+      const base64 = await FileSystem.readAsStringAsync(photo.path, {
+        encoding: FileSystem.EncodingType.Base64,
       });
-
-      if (!photo?.base64) {
-        throw new Error('Camera snapshot returned no base64 data');
-      }
 
       const rawFrame = {
-        width: photo.width && photo.width > 0 ? photo.width : Math.max(screenWidth, screenHeight),
-        height: photo.height && photo.height > 0 ? photo.height : Math.min(screenWidth, screenHeight),
+        width: photo.width > 0 ? photo.width : Math.max(screenWidth, screenHeight),
+        height: photo.height > 0 ? photo.height : Math.min(screenWidth, screenHeight),
       };
-      const frame = normalizeFrameSize(rawFrame, screenWidth, screenHeight);
-      setFrameSize(frame);
+      const frame = getEffectiveFrameSize(rawFrame.width, rawFrame.height, screenWidth, screenHeight);
 
-      const result = await invokeDetectShot({
-        imageBase64: photo.base64,
-        mode: 'calibrate',
-        screenMode: true,
-      });
+      const ballDet = pickBestDetection(overlayDetections, 'ball');
+      const hoopDet = pickBestDetection(overlayDetections, 'hoop');
 
       setCalibrationSnapshot({
-        uri: `data:image/jpeg;base64,${photo.base64}`,
-        ball: result.ballBox ? boxToAnchor(result.ballBox) : DEFAULT_BALL_ANCHOR,
-        hoop: result.hoopBox ? boxToAnchor(result.hoopBox) : DEFAULT_HOOP_ANCHOR,
+        uri: `data:image/jpeg;base64,${base64}`,
+        ball: ballDet ? detectionToAnchor(ballDet, frame.width, frame.height) : DEFAULT_BALL_ANCHOR,
+        hoop: hoopDet ? detectionToAnchor(hoopDet, frame.width, frame.height) : DEFAULT_HOOP_ANCHOR,
       });
       setSessionPhase('confirm');
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Calibration failed';
-      const friendly = toFriendlyDetectError(message);
-      if (friendly) {
-        setCloudDetectError(friendly);
-      }
+      console.error('CALIBRATION_SCAN_ERROR:', error);
       setSessionPhase('preview');
     }
-  }, [screenHeight, screenWidth]);
+  }, [overlayDetections, screenHeight, screenWidth]);
 
   const handleConfirmTargets = useCallback(
     (
@@ -358,17 +282,16 @@ export default function LiveSessionScreen() {
         hoop,
         displayBall,
         displayHoop,
-        frameSize.width,
-        frameSize.height,
+        frameLayout.width,
+        frameLayout.height,
       );
       setSessionTargets(targets);
       setCalibrationSnapshot(null);
-      cloudDetectionRef.current = null;
-      setCloudDetection(null);
+      smootherRef.current.reset();
       setSessionPhase('running');
       setSessionStarted(true);
     },
-    [frameSize.height, frameSize.width],
+    [frameLayout.height, frameLayout.width],
   );
 
   const handleRetakeCalibration = useCallback(() => {
@@ -377,10 +300,9 @@ export default function LiveSessionScreen() {
   }, []);
 
   const handleEndSession = useCallback(() => {
-    if (isEnding) {
-      return;
+    if (!isEnding) {
+      setShowEndConfirm(true);
     }
-    setShowEndConfirm(true);
   }, [isEnding]);
 
   const handleCancelEndSession = useCallback(() => {
@@ -408,13 +330,25 @@ export default function LiveSessionScreen() {
         router.replace(`/session/summary?sessionId=${completed.id}`);
         return;
       }
-
       setIsEnding(false);
     } catch (error) {
       console.error('END_SESSION_ERROR:', error);
       setIsEnding(false);
     }
   }, [isEnding, router, stats.bestStreak, stats.currentStreak, stats.fgPercent]);
+
+  const modelStatusText = useMemo(() => {
+    if (useMock) {
+      return 'Mock detection';
+    }
+    if (pipeline.modelState === 'loading') {
+      return 'טוען מודל TFLite...';
+    }
+    if (pipeline.modelLoaded) {
+      return `מודל מקומי: ${ACTIVE_MODEL_KIND_RESOLVED} (${ACTIVE_MODEL_FILENAME})`;
+    }
+    return 'מודל חסר';
+  }, [pipeline.modelLoaded, pipeline.modelState, useMock]);
 
   if (!hasPermission) {
     return (
@@ -431,8 +365,8 @@ export default function LiveSessionScreen() {
       {sessionPhase === 'confirm' && calibrationSnapshot ? (
         <TargetCalibrationView
           imageUri={calibrationSnapshot.uri}
-          frameWidth={frameSize.width}
-          frameHeight={frameSize.height}
+          frameWidth={frameLayout.width}
+          frameHeight={frameLayout.height}
           displayWidth={screenWidth}
           displayHeight={screenHeight}
           initialBall={calibrationSnapshot.ball}
@@ -442,128 +376,123 @@ export default function LiveSessionScreen() {
         />
       ) : (
         <>
-      <PreviewCamera
-        ref={cameraRef}
-        isActive={cameraSessionActive}
-        enablePhotoCapture={calibrationPhotoMode || cloudDetectionEnabled}
-        enableVideoCapture={highlightRecording}
-      />
-
-      <View style={styles.uiLayer} pointerEvents="box-none">
-        {sessionPhase === 'preview' && (
-          <View style={styles.previewOverlay}>
-            <Text style={styles.previewTitle}>כוון את המצלמה לסל ולכדור</Text>
-            <Text style={styles.previewHint}>
-              נצלם תמונה, תאשר את מיקום הסל והכדור — ואז האימון יתחיל
-            </Text>
-            <Button
-              title="זהה סל וכדור"
-              onPress={() => void runCalibrationScan()}
-              size="lg"
-              fullWidth
-            />
-          </View>
-        )}
-
-        {sessionPhase === 'scanning' && (
-          <View style={styles.scanningOverlay}>
-            <Text style={styles.scanningText}>מזהה סל וכדור...</Text>
-          </View>
-        )}
-
-        {useMock && (
-          <View style={styles.mockBanner} pointerEvents="none">
-            <Text style={styles.mockBannerText}>MOCK — זריקות מדומות</Text>
-          </View>
-        )}
-
-        {highlightRecording && (
-          <View style={styles.recordingBanner} pointerEvents="none">
-            <Text style={styles.recordingBannerText}>מקליט זריקה...</Text>
-          </View>
-        )}
-
-        {isRunning && cloudDetection && (
-          <DetectionOverlay
-            cloudDetection={cloudDetection}
-            displayWidth={screenWidth}
-            displayHeight={screenHeight}
-            frameWidth={frameSize.width}
-            frameHeight={frameSize.height}
-            showDebug={debugMode}
+          <InferenceCamera
+            ref={cameraRef}
+            isActive={cameraSessionActive}
+            frameProcessor={pipeline.frameProcessor}
           />
-        )}
 
-        {!supabaseReady && !useMock && (
-          <View style={styles.modelBanner} pointerEvents="none">
-            <Text style={styles.modelBannerText}>
-              Supabase לא מוגדר — הגדר EXPO_PUBLIC_SUPABASE_URL ו-EXPO_PUBLIC_SUPABASE_ANON_KEY
-            </Text>
+          <View style={styles.uiLayer} pointerEvents="box-none">
+            {(isPreview || isRunning) && frameLayout.width > 0 && (
+              <LocalDetectionOverlay
+                detections={overlayDetections}
+                frameWidth={frameLayout.width}
+                frameHeight={frameLayout.height}
+                displayWidth={screenWidth}
+                displayHeight={screenHeight}
+                orientation={frameLayout.orientation}
+                isMirrored={frameLayout.isMirrored}
+                showDebug={debugMode}
+                previewMode={isPreview}
+              />
+            )}
+
+            {isPreview && (
+              <View style={styles.previewOverlay} pointerEvents="box-none">
+                <Text style={styles.previewTitle}>כוון את המצלמה לסל ולכדור</Text>
+                <Text style={styles.previewHint}>
+                  זיהוי מקומי בזמן אמת (COCO: כדור + שחקן). גרור את הסל ידנית באישור.
+                </Text>
+                <Button
+                  title="צלם ואשר מיקומים"
+                  onPress={() => void runCalibrationScan()}
+                  size="lg"
+                  fullWidth
+                />
+              </View>
+            )}
+
+            {sessionPhase === 'scanning' && (
+              <View style={styles.scanningOverlay}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={styles.scanningText}>שומר פריים...</Text>
+              </View>
+            )}
+
+            {pipeline.modelState === 'loading' && (
+              <View style={styles.modelBanner} pointerEvents="none">
+                <Text style={styles.modelBannerText}>{modelStatusText}</Text>
+              </View>
+            )}
+
+            {pipelineError && (
+              <View style={styles.errorBanner} pointerEvents="none">
+                <Text style={styles.errorBannerText}>{pipelineError}</Text>
+              </View>
+            )}
+
+            {useMock && (
+              <View style={styles.mockBanner} pointerEvents="none">
+                <Text style={styles.mockBannerText}>MOCK — זריקות מדומות</Text>
+              </View>
+            )}
+
+            <SwishEffect visible={showSwish} onComplete={() => setShowSwish(false)} />
           </View>
-        )}
 
-        {cloudDetectError && (
-          <View style={styles.errorBanner} pointerEvents="none">
-            <Text style={styles.errorBannerText}>{cloudDetectError}</Text>
-          </View>
-        )}
+          <View style={styles.controlsLayer} pointerEvents="box-none">
+            {isRunning && (
+              <View style={styles.topOverlay}>
+                <Text style={styles.timer}>{formatTime(elapsed)}</Text>
+                {__DEV__ && (
+                  <>
+                    <Pressable onPress={() => setDebugMode((d) => !d)}>
+                      <Text style={styles.debugBtn}>{debugMode ? 'Debug ON' : 'Debug'}</Text>
+                    </Pressable>
+                    <Pressable onPress={() => setUseMock((m) => !m)}>
+                      <Text style={[styles.debugBtn, useMock && styles.mockBtnActive]}>
+                        {useMock ? 'Mock ON' : 'TFLite'}
+                      </Text>
+                    </Pressable>
+                  </>
+                )}
+              </View>
+            )}
 
-        <SwishEffect visible={showSwish} onComplete={() => setShowSwish(false)} />
-      </View>
-
-      <View style={styles.controlsLayer} pointerEvents="box-none">
-        {isRunning && (
-          <View style={styles.topOverlay}>
-            <Text style={styles.timer}>{formatTime(elapsed)}</Text>
-            {__DEV__ && (
-              <>
-                <Pressable onPress={() => setDebugMode((d) => !d)}>
-                  <Text style={styles.debugBtn}>{debugMode ? 'Debug ON' : 'Debug'}</Text>
-                </Pressable>
-                <Pressable onPress={() => setUseMock((m) => !m)}>
-                  <Text style={[styles.debugBtn, useMock && styles.mockBtnActive]}>
-                    {useMock ? 'Mock ON' : 'Cloud AI'}
+            {isRunning && (
+              <View style={styles.statsOverlay}>
+                <View style={styles.statBox}>
+                  <Text style={styles.statValue}>
+                    {stats.madeShots}/{stats.totalShots}
                   </Text>
+                  <Text style={styles.statLabel}>{t('session.made')}</Text>
+                </View>
+                <View style={styles.statBox}>
+                  <Text style={[styles.statValue, styles.percentValue]}>{stats.fgPercent}%</Text>
+                  <Text style={styles.statLabel}>{t('session.fgPercent')}</Text>
+                </View>
+                {stats.currentStreak > 0 && (
+                  <View style={styles.streakBox}>
+                    <Text style={styles.streakText}>🔥 {stats.currentStreak}</Text>
+                  </View>
+                )}
+              </View>
+            )}
+
+            {isRunning && (
+              <View style={styles.bottomOverlay}>
+                <Pressable
+                  style={[styles.stopButton, isEnding && styles.stopButtonDisabled]}
+                  onPress={handleEndSession}
+                  disabled={isEnding}
+                  hitSlop={16}
+                >
+                  <View style={styles.stopInner} />
                 </Pressable>
-              </>
+                <Text style={styles.stopLabel}>{isEnding ? 'מסיים...' : t('session.stop')}</Text>
+              </View>
             )}
           </View>
-        )}
-
-        {isRunning && (
-        <View style={styles.statsOverlay}>
-          <View style={styles.statBox}>
-            <Text style={styles.statValue}>
-              {stats.madeShots}/{stats.totalShots}
-            </Text>
-            <Text style={styles.statLabel}>{t('session.made')}</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Text style={[styles.statValue, styles.percentValue]}>{stats.fgPercent}%</Text>
-            <Text style={styles.statLabel}>{t('session.fgPercent')}</Text>
-          </View>
-          {stats.currentStreak > 0 && (
-            <View style={styles.streakBox}>
-              <Text style={styles.streakText}>🔥 {stats.currentStreak}</Text>
-            </View>
-          )}
-        </View>
-        )}
-
-        {isRunning && (
-        <View style={styles.bottomOverlay}>
-          <Pressable
-            style={[styles.stopButton, isEnding && styles.stopButtonDisabled]}
-            onPress={handleEndSession}
-            disabled={isEnding}
-            hitSlop={16}
-          >
-            <View style={styles.stopInner} />
-          </Pressable>
-          <Text style={styles.stopLabel}>{isEnding ? 'מסיים...' : t('session.stop')}</Text>
-        </View>
-        )}
-      </View>
         </>
       )}
 
@@ -593,20 +522,9 @@ export default function LiveSessionScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  uiLayer: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 10,
-    elevation: 10,
-  },
-  controlsLayer: {
-    ...StyleSheet.absoluteFillObject,
-    zIndex: 50,
-    elevation: 50,
-  },
+  container: { flex: 1, backgroundColor: colors.background },
+  uiLayer: { ...StyleSheet.absoluteFillObject, zIndex: 10, elevation: 10 },
+  controlsLayer: { ...StyleSheet.absoluteFillObject, zIndex: 50, elevation: 50 },
   fallback: {
     flex: 1,
     backgroundColor: colors.background,
@@ -614,10 +532,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: spacing.lg,
   },
-  fallbackText: {
-    color: colors.text,
-    fontFamily: 'Rubik_400Regular',
-  },
+  fallbackText: { color: colors.text, fontFamily: 'Rubik_400Regular' },
   previewOverlay: {
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'flex-end',
@@ -644,12 +559,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.55)',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: spacing.md,
   },
-  scanningText: {
-    color: colors.text,
-    fontFamily: 'Rubik_600SemiBold',
-    fontSize: 18,
-  },
+  scanningText: { color: colors.text, fontFamily: 'Rubik_600SemiBold', fontSize: 18 },
   topOverlay: {
     position: 'absolute',
     top: 16,
@@ -690,39 +602,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     borderRadius: 8,
   },
-  mockBannerText: {
-    color: colors.background,
-    fontFamily: 'Rubik_700Bold',
-    fontSize: 13,
-  },
-  aiBanner: {
-    position: 'absolute',
-    top: 80,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(34,197,94,0.9)',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: 8,
-  },
-  aiBannerText: {
-    color: colors.background,
-    fontFamily: 'Rubik_700Bold',
-    fontSize: 13,
-  },
-  recordingBanner: {
-    position: 'absolute',
-    top: 112,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(239,68,68,0.85)',
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
-    borderRadius: 8,
-  },
-  recordingBannerText: {
-    color: colors.text,
-    fontFamily: 'Rubik_700Bold',
-    fontSize: 12,
-  },
+  mockBannerText: { color: colors.background, fontFamily: 'Rubik_700Bold', fontSize: 13 },
   modelBanner: {
     position: 'absolute',
     top: 80,
@@ -734,11 +614,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  modelBannerText: {
-    color: colors.textSecondary,
-    fontFamily: 'Rubik_400Regular',
-    fontSize: 12,
-  },
+  modelBannerText: { color: colors.textSecondary, fontFamily: 'Rubik_400Regular', fontSize: 12 },
   errorBanner: {
     position: 'absolute',
     top: 112,
@@ -772,19 +648,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  statValue: {
-    ...typography.title,
-    color: colors.text,
-    fontFamily: 'Rubik_800ExtraBold',
-  },
-  percentValue: {
-    color: colors.primary,
-  },
-  statLabel: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontFamily: 'Rubik_400Regular',
-  },
+  statValue: { ...typography.title, color: colors.text, fontFamily: 'Rubik_800ExtraBold' },
+  percentValue: { color: colors.primary },
+  statLabel: { color: colors.textSecondary, fontSize: 11, fontFamily: 'Rubik_400Regular' },
   streakBox: {
     backgroundColor: 'rgba(245,158,11,0.3)',
     borderRadius: 20,
@@ -793,11 +659,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.streak,
   },
-  streakText: {
-    color: colors.streak,
-    fontFamily: 'Rubik_700Bold',
-    fontSize: 16,
-  },
+  streakText: { color: colors.streak, fontFamily: 'Rubik_700Bold', fontSize: 16 },
   bottomOverlay: {
     position: 'absolute',
     bottom: 16,
@@ -819,15 +681,8 @@ const styles = StyleSheet.create({
     zIndex: 61,
     elevation: 61,
   },
-  stopButtonDisabled: {
-    opacity: 0.5,
-  },
-  stopInner: {
-    width: 28,
-    height: 28,
-    borderRadius: 6,
-    backgroundColor: colors.error,
-  },
+  stopButtonDisabled: { opacity: 0.5 },
+  stopInner: { width: 28, height: 28, borderRadius: 6, backgroundColor: colors.error },
   stopLabel: {
     color: colors.text,
     fontFamily: 'Rubik_600SemiBold',
@@ -865,11 +720,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
   },
-  confirmActions: {
-    flexDirection: 'row-reverse',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
+  confirmActions: { flexDirection: 'row-reverse', gap: spacing.sm, marginTop: spacing.sm },
   confirmCancel: {
     flex: 1,
     paddingVertical: spacing.sm,
@@ -877,10 +728,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
     alignItems: 'center',
   },
-  confirmCancelText: {
-    color: colors.text,
-    fontFamily: 'Rubik_600SemiBold',
-  },
+  confirmCancelText: { color: colors.text, fontFamily: 'Rubik_600SemiBold' },
   confirmEnd: {
     flex: 1,
     paddingVertical: spacing.sm,
@@ -888,8 +736,5 @@ const styles = StyleSheet.create({
     backgroundColor: colors.error,
     alignItems: 'center',
   },
-  confirmEndText: {
-    color: colors.text,
-    fontFamily: 'Rubik_700Bold',
-  },
+  confirmEndText: { color: colors.text, fontFamily: 'Rubik_700Bold' },
 });

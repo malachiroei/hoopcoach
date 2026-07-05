@@ -23,8 +23,6 @@
       },
       "permissions": [
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO"
       ],
       "package": "com.hoopcoach.app"
@@ -36,6 +34,7 @@
     },
     "plugins": [
       "expo-router",
+      "expo-dev-client",
       [
         "expo-splash-screen",
         {
@@ -44,13 +43,30 @@
           "backgroundColor": "#0A0A0F"
         }
       ],
+      [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "HoopCoach צריך גישה למצלמה כדי לעקוב אחרי הזריקות שלך.",
+          "enableMicrophonePermission": false,
+          "microphonePermissionText": "HoopCoach צריך גישה למיקרופון להקלטת היילייטס."
+        }
+      ],
       "expo-font",
       [
-        "expo-camera",
+        "expo-build-properties",
         {
-          "cameraPermission": "HoopCoach צריך גישה למצלמה כדי לעקוב אחרי הזריקות שלך.",
-          "microphonePermission": "HoopCoach צריך גישה למיקרופון להקלטת היילייטס (ללא שמע).",
-          "recordAudioAndroid": true
+          "android": {
+            "kotlinVersion": "2.0.21",
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35,
+            "minSdkVersion": 24,
+            "packagingOptions": {
+              "exclude": ["lib/riscv64/**"]
+            }
+          },
+          "ios": {
+            "deploymentTarget": "15.1"
+          }
         }
       ],
       "expo-sqlite",

@@ -1,36 +1,51 @@
-# Basketball Detection Model
+# On-Device Detection Models
 
-## Classes
-- `0`: ball
-- `1`: hoop
-- `2`: ballInBasket
-- `3`: player
+## Step 1 — Test pipeline (COCO pre-trained)
 
-## Training
+```powershell
+python -m venv .venv-train
+.venv-train\Scripts\activate
+pip install ultralytics
+python scripts/download_coco_tflite.py
+```
 
-Run the training script from the project root:
+This creates `yolov8n_coco.tflite` which detects:
+- **class 32** → sports ball (mapped to `ball` overlay)
+- **class 0** → person (mapped to `player` overlay)
 
-```bash
-pip install ultralytics onnx tf2onnx tensorflow
+COCO does **not** detect hoops — drag the green square manually during calibration until `basketball_detector.tflite` is trained.
+
+## Step 2 — Train custom basketball model
+
+```powershell
+python scripts/extract_youtube_frames.py "https://www.youtube.com/watch?v=..." --start 922
+# Label in Roboflow: ball, hoop, player
 python scripts/train_model.py
 ```
 
-This will:
-1. Fine-tune YOLOv8n on the Roboflow Basketball Detection dataset
-2. Export to ONNX
-3. Convert to TFLite int8 quantization
-4. Copy `basketball_detector.tflite` to this directory
+Then in `src/models/modelSource.ts` set:
 
-## Dataset Sources
-- [Roboflow Basketball Detection](https://universe.roboflow.com/basketball-6vyfz/basketball-detection-srfkd)
-- [SwishAI YOLOv11 weights](https://github.com/sPappalard/SwishAI)
+```typescript
+export const ACTIVE_MODEL_KIND: ActiveModelKind = 'basketball';
+```
 
-## Development Mode
+## Local Android build (Windows)
 
-Until the TFLite model is trained and placed here, the app uses `mockDetector.ts`
-to simulate shot detection for UI development and testing.
+```powershell
+npm install
+npx expo prebuild --platform android --clean
+npx expo run:android
+```
 
-## Model Requirements
-- Input: 320x320x3 uint8 RGB
-- Output: YOLO format detections [x, y, w, h, confidence, class_id]
-- Target inference: 5-10 FPS on mid-range devices
+Requires Android Studio + JDK 17 + `ANDROID_HOME` set.
+
+## Classes (custom model)
+
+| Index | Class |
+|-------|-------|
+| 0 | ball |
+| 1 | hoop |
+| 2 | ballInBasket |
+| 3 | player |
+
+Input: 320×320 RGB uint8. Inference every 3rd frame (~10 FPS on mid devices).

@@ -30,6 +30,8 @@ interface UseCloudShotDetectionOptions {
   enabled: boolean;
   confidenceThreshold?: number;
   intervalMs?: number;
+  /** Use calibrate mode for sharper ball/hoop boxes during setup preview. */
+  detectMode?: DetectShotMode;
   onDetection: (
     result: DetectShotResponse,
     frame?: { width: number; height: number },
@@ -43,6 +45,7 @@ export function useCloudShotDetection({
   enabled,
   confidenceThreshold = 0.5,
   intervalMs = DEFAULT_INTERVAL_MS,
+  detectMode = 'track',
   onDetection,
   onShot,
   onError,
@@ -73,7 +76,7 @@ export function useCloudShotDetection({
       try {
         const photo = await camera.takePictureAsync({
           base64: true,
-          quality: 0.55,
+          quality: detectMode === 'calibrate' ? 0.82 : 0.55,
           shutterSound: false,
           skipProcessing: true,
         });
@@ -86,7 +89,8 @@ export function useCloudShotDetection({
         const prevImageBase64 = buffer[buffer.length - 1];
         const prevImage2Base64 = buffer[buffer.length - 2];
         const watchActive = Date.now() < watchUntilRef.current;
-        const mode: DetectShotMode = watchActive ? 'outcome' : 'track';
+        const mode: DetectShotMode =
+          detectMode === 'calibrate' ? 'calibrate' : watchActive ? 'outcome' : 'track';
 
         const result = await invokeDetectShot({
           imageBase64: photo.base64,
@@ -182,6 +186,7 @@ export function useCloudShotDetection({
     confidenceThreshold,
     enabled,
     intervalMs,
+    detectMode,
     onDetection,
     onShot,
     onError,

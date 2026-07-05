@@ -5,11 +5,16 @@ import { colors } from '@/src/theme';
 
 interface DetectionOverlayProps {
   cloudDetection: DetectShotResponse | null;
+  /** Last known positions — markers stay visible between API frames. */
+  stickyBallBox?: CloudNormalizedBox | null;
+  stickyHoopBox?: CloudNormalizedBox | null;
   displayWidth: number;
   displayHeight: number;
   frameWidth: number;
   frameHeight: number;
   showDebug?: boolean;
+  /** Preview/setup — simpler status, always show markers when available. */
+  previewMode?: boolean;
 }
 
 function boxToScreenRect(
@@ -32,8 +37,10 @@ function boxToScreenRect(
 
 function BallMarker({
   rect,
+  label = 'כדור',
 }: {
   rect: { left: number; top: number; width: number; height: number };
+  label?: string;
 }) {
   const size = Math.max(rect.width, rect.height, 28);
   const cx = rect.left + rect.width / 2;
@@ -43,39 +50,65 @@ function BallMarker({
     <View
       pointerEvents="none"
       style={[
-        styles.ballCircle,
+        styles.markerWrap,
         {
           left: cx - size / 2,
           top: cy - size / 2,
           width: size,
           height: size,
-          borderRadius: size / 2,
         },
       ]}
-    />
+    >
+      <Text style={styles.markerLabel}>{label}</Text>
+      <View
+        style={[
+          styles.ballCircle,
+          {
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+          },
+        ]}
+      />
+    </View>
   );
 }
 
 function HoopMarker({
   rect,
+  label = 'סל',
 }: {
   rect: { left: number; top: number; width: number; height: number };
+  label?: string;
 }) {
   const size = Math.max(rect.width, rect.height, 44);
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
 
   return (
     <View
       pointerEvents="none"
       style={[
-        styles.hoopSquare,
+        styles.markerWrap,
         {
-          left: rect.left + rect.width / 2 - size / 2,
-          top: rect.top + rect.height / 2 - size / 2,
+          left: cx - size / 2,
+          top: cy - size / 2,
           width: size,
           height: size,
         },
       ]}
-    />
+    >
+      <Text style={styles.markerLabel}>{label}</Text>
+      <View
+        style={[
+          styles.hoopSquare,
+          {
+            width: size,
+            height: size,
+          },
+        ]}
+      />
+    </View>
   );
 }
 
@@ -118,40 +151,49 @@ function PlayerMarker({
 
 export function DetectionOverlay({
   cloudDetection,
+  stickyBallBox = null,
+  stickyHoopBox = null,
   displayWidth,
   displayHeight,
   frameWidth,
   frameHeight,
   showDebug = false,
+  previewMode = false,
 }: DetectionOverlayProps) {
-  if (!cloudDetection || displayWidth <= 0 || displayHeight <= 0) {
+  if (displayWidth <= 0 || displayHeight <= 0) {
     return null;
   }
 
-  const liveBallBox = cloudDetection.ballBox ?? null;
-  const liveHoopBox = cloudDetection.hoopBox ?? null;
-  const livePlayers = cloudDetection.players ?? [];
-  const hasLiveBall = Boolean(liveBallBox);
-  const hasLiveHoop = Boolean(liveHoopBox);
+  const liveBallBox = cloudDetection?.ballBox ?? null;
+  const liveHoopBox = cloudDetection?.hoopBox ?? null;
+  const ballBox = liveBallBox ?? stickyBallBox;
+  const hoopBox = liveHoopBox ?? stickyHoopBox;
+  const livePlayers = cloudDetection?.players ?? [];
   const hasLivePlayers = livePlayers.length > 0;
 
-  const ballRect = hasLiveBall
-    ? boxToScreenRect(liveBallBox!, frameWidth, frameHeight, displayWidth, displayHeight)
+  const ballRect = ballBox
+    ? boxToScreenRect(ballBox, frameWidth, frameHeight, displayWidth, displayHeight)
     : null;
 
-  const hoopRect = hasLiveHoop
-    ? boxToScreenRect(liveHoopBox!, frameWidth, frameHeight, displayWidth, displayHeight)
+  const hoopRect = hoopBox
+    ? boxToScreenRect(hoopBox, frameWidth, frameHeight, displayWidth, displayHeight)
     : null;
 
-  const statusText = cloudDetection.shotActive
-    ? cloudDetection.event === 'shot_made'
-      ? '✅ סל!'
-      : cloudDetection.event === 'shot_missed'
-        ? '❌ החטאה'
-        : '🏀 זריקה'
-    : hasLiveBall
-      ? 'מזהה כדור'
-      : 'מחפש כדור...';
+  const statusText = previewMode
+    ? ballRect && hoopRect
+      ? 'זיהוי פעיל — גרור לכיוון או צלם לאישור'
+      : ballRect || hoopRect
+        ? 'מזהה...'
+        : 'מחפש כדור וסל...'
+    : cloudDetection?.shotActive
+      ? cloudDetection.event === 'shot_made'
+        ? '✅ סל!'
+        : cloudDetection.event === 'shot_missed'
+          ? '❌ החטאה'
+          : '🏀 זריקה'
+      : ballRect
+        ? 'מזהה כדור'
+        : 'מחפש כדור...';
 
   return (
     <View style={[StyleSheet.absoluteFill, { direction: 'ltr' }]} pointerEvents="none">
@@ -159,34 +201,34 @@ export function DetectionOverlay({
 
       {ballRect && <BallMarker rect={ballRect} />}
 
-      {livePlayers.map((player) => (
-        <PlayerMarker
-          key={`p${player.index}-${Math.round(player.box.x * 10000)}-${Math.round(player.box.y * 10000)}`}
-          player={player}
-          frameWidth={frameWidth}
-          frameHeight={frameHeight}
-          displayWidth={displayWidth}
-          displayHeight={displayHeight}
-        />
-      ))}
+      {!previewMode &&
+        livePlayers.map((player) => (
+          <PlayerMarker
+            key={`p${player.index}-${Math.round(player.box.x * 10000)}-${Math.round(player.box.y * 10000)}`}
+            player={player}
+            frameWidth={frameWidth}
+            frameHeight={frameHeight}
+            displayWidth={displayWidth}
+            displayHeight={displayHeight}
+          />
+        ))}
 
       <View style={styles.statusPill}>
         <Text style={styles.statusText}>{statusText}</Text>
         <View style={styles.detectionRow}>
-          <Text style={[styles.detectionChip, hasLiveBall ? styles.chipOn : styles.chipOff]}>
-            כדור {hasLiveBall ? '✓' : '—'}
+          <Text style={[styles.detectionChip, ballRect ? styles.chipOn : styles.chipOff]}>
+            כדור {ballRect ? '✓' : '—'}
           </Text>
-          <Text style={[styles.detectionChip, hasLiveHoop ? styles.chipOn : styles.chipOff]}>
-            סל {hasLiveHoop ? '✓' : '—'}
+          <Text style={[styles.detectionChip, hoopRect ? styles.chipOn : styles.chipOff]}>
+            סל {hoopRect ? '✓' : '—'}
           </Text>
-          <Text style={[styles.detectionChip, hasLivePlayers ? styles.chipOn : styles.chipOff]}>
-            שחקנים {hasLivePlayers ? livePlayers.length : '—'}
-          </Text>
+          {!previewMode && (
+            <Text style={[styles.detectionChip, hasLivePlayers ? styles.chipOn : styles.chipOff]}>
+              שחקנים {hasLivePlayers ? livePlayers.length : '—'}
+            </Text>
+          )}
         </View>
-        {!hasLiveBall && !hasLiveHoop && (
-          <Text style={styles.hintText}>ממתין לזיהוי חי מהמצלמה...</Text>
-        )}
-        {showDebug && cloudDetection.observation && (
+        {showDebug && cloudDetection?.observation && (
           <Text style={styles.debugText} numberOfLines={2}>
             {cloudDetection.observation}
           </Text>
@@ -197,17 +239,34 @@ export function DetectionOverlay({
 }
 
 const styles = StyleSheet.create({
-  ballCircle: {
+  markerWrap: {
     position: 'absolute',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 25,
+  },
+  markerLabel: {
+    position: 'absolute',
+    top: -22,
+    color: '#fff',
+    fontFamily: 'Rubik_700Bold',
+    fontSize: 12,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+    zIndex: 26,
+  },
+  ballCircle: {
     borderWidth: 3,
     borderColor: '#FF8C00',
     backgroundColor: 'rgba(255, 140, 0, 0.3)',
   },
   hoopSquare: {
-    position: 'absolute',
     borderWidth: 3,
     borderColor: '#22C55E',
     backgroundColor: 'rgba(34, 197, 94, 0.2)',
+    borderRadius: 4,
   },
   playerWrap: {
     position: 'absolute',
@@ -274,13 +333,6 @@ const styles = StyleSheet.create({
   chipOff: {
     color: '#FCA5A5',
     backgroundColor: 'rgba(239,68,68,0.2)',
-  },
-  hintText: {
-    color: colors.textSecondary,
-    fontFamily: 'Rubik_400Regular',
-    fontSize: 10,
-    textAlign: 'right',
-    marginTop: 2,
   },
   debugText: {
     color: colors.textSecondary,

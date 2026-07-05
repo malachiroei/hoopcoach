@@ -1,9 +1,13 @@
-import type { DetectionBox } from '@/src/types';
+import type { ReadonlyFrameProcessor } from 'react-native-vision-camera';
+import { useTfliteCameraPipeline } from '@/src/hooks/useTfliteCameraPipeline';
+import type { FrameDetectionPayload } from '@/src/hooks/useTfliteFrameProcessor';
+import { isModelAssetBundled } from '@/src/models/modelSource';
 
 export type CameraPipelineResult = {
-  frameProcessor: undefined;
+  frameProcessor: ReadonlyFrameProcessor | undefined;
   modelLoaded: boolean;
-  modelState: 'missing' | 'loading' | 'loaded' | 'error' | 'cloud';
+  modelState: 'missing' | 'loading' | 'loaded' | 'error';
+  modelError?: unknown;
 };
 
 export const MISSING_MODEL_PIPELINE: CameraPipelineResult = {
@@ -12,22 +16,20 @@ export const MISSING_MODEL_PIPELINE: CameraPipelineResult = {
   modelState: 'missing',
 };
 
-export const CLOUD_PIPELINE: CameraPipelineResult = {
-  frameProcessor: undefined,
-  modelLoaded: true,
-  modelState: 'cloud',
-};
-
-/**
- * Legacy stub — on-device TFLite has been replaced by cloud `detect-shot`.
- */
 export function useCameraPipeline(
-  _onDetections: (detections: DetectionBox[], frameWidth: number, frameHeight: number) => void,
-  _enabled = true
+  onDetections: (payload: FrameDetectionPayload) => void,
+  enabled = true,
 ): CameraPipelineResult {
-  return CLOUD_PIPELINE;
+  const pipeline = useTfliteCameraPipeline(onDetections, enabled && isModelAssetBundled());
+
+  return {
+    frameProcessor: pipeline.frameProcessor,
+    modelLoaded: pipeline.modelLoaded,
+    modelState: pipeline.modelState,
+    modelError: pipeline.modelError,
+  };
 }
 
 export function isModelBundled(): boolean {
-  return false;
+  return isModelAssetBundled();
 }

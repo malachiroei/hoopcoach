@@ -1,4 +1,4 @@
-import type { DetectionBox } from '@/src/types';
+import type { DetectionBox, DetectionClass } from '@/src/types';
 
 export const DETECTION_CLASSES = ['ball', 'hoop', 'ballInBasket', 'player'] as const;
 
@@ -318,21 +318,24 @@ function decodeYolov5ModelBox(
   return clampBoxToFrame(box, frameWidth, frameHeight);
 }
 
-function collectYolov5AnchorBoxes(
+function collectYolov5AnchorBoxesForClasses(
   data: Float32Array,
   numAnchors: number,
   numChannels: number,
   numClasses: number,
   frameWidth: number,
   frameHeight: number,
-  confidenceThreshold: number
+  confidenceThreshold: number,
+  classEntries: { classIndex: number; classId: DetectionClass }[],
 ): DetectionBox[] {
   const major: TensorMajor = 'anchor';
   const scoreLayout = getScoreChannelLayout(numChannels, numClasses);
   const validBoxes: DetectionBox[] = [];
 
-  for (let classIndex = 0; classIndex < numClasses; classIndex++) {
-    const classId = DETECTION_CLASSES[classIndex];
+  for (const { classIndex, classId } of classEntries) {
+    if (classIndex < 0 || classIndex >= numClasses) {
+      continue;
+    }
 
     interface Candidate {
       box: { x: number; y: number; width: number; height: number };
@@ -359,7 +362,7 @@ function collectYolov5AnchorBoxes(
         numAnchors,
         numChannels,
         major,
-        scoreLayout
+        scoreLayout,
       );
 
       candidates.push({ box, scoreLogit });
@@ -402,6 +405,31 @@ function collectYolov5AnchorBoxes(
   }
 
   return validBoxes;
+}
+
+function collectYolov5AnchorBoxes(
+  data: Float32Array,
+  numAnchors: number,
+  numChannels: number,
+  numClasses: number,
+  frameWidth: number,
+  frameHeight: number,
+  confidenceThreshold: number
+): DetectionBox[] {
+  const classEntries = DETECTION_CLASSES.map((classId, classIndex) => ({
+    classIndex,
+    classId,
+  }));
+  return collectYolov5AnchorBoxesForClasses(
+    data,
+    numAnchors,
+    numChannels,
+    numClasses,
+    frameWidth,
+    frameHeight,
+    confidenceThreshold,
+    classEntries,
+  );
 }
 
 function decodeBox(
@@ -508,6 +536,20 @@ export function parseYoloOutput(
     return [];
   }
 
+  const classEntries = DETECTION_CLASSES.map((classId, classIndex) => ({
+    classIndex,
+    classId,
+  }));
+  return parseYoloOutputWithClasses(data, frameWidth, frameHeight, config, classEntries);
+}
+
+export function parseYoloOutputWithClasses(
+  data: Float32Array,
+  frameWidth: number,
+  frameHeight: number,
+  config: ModelConfig,
+  classEntries: { classIndex: number; classId: DetectionClass }[],
+): DetectionBox[] {
   const numClasses = config.numClasses;
   const shape = resolveYoloShape(data.length, numClasses);
   if (!shape || shape.numChannels < numClasses + 4) {
@@ -516,14 +558,15 @@ export function parseYoloOutput(
 
   const { numChannels, numAnchors } = shape;
 
-  const validBoxes = collectYolov5AnchorBoxes(
+  const validBoxes = collectYolov5AnchorBoxesForClasses(
     data,
     numAnchors,
     numChannels,
     numClasses,
     frameWidth,
     frameHeight,
-    config.confidenceThreshold
+    config.confidenceThreshold,
+    classEntries,
   );
 
   if (validBoxes.length > 0) {

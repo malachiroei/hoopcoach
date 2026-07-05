@@ -188,6 +188,32 @@ export function mapDetectionBoxToScreen(
   return result;
 }
 
+export function getEffectiveFrameSize(
+  photoWidth: number,
+  photoHeight: number,
+  displayWidth: number,
+  displayHeight: number,
+): { width: number; height: number } {
+  if (photoWidth <= 0 || photoHeight <= 0) {
+    return {
+      width: Math.max(displayWidth, displayHeight),
+      height: Math.min(displayWidth, displayHeight),
+    };
+  }
+
+  const displayLandscape = displayWidth > displayHeight;
+  const photoLandscape = photoWidth > photoHeight;
+
+  if (displayLandscape && !photoLandscape) {
+    return { width: photoHeight, height: photoWidth };
+  }
+  if (!displayLandscape && photoLandscape) {
+    return { width: photoHeight, height: photoWidth };
+  }
+
+  return { width: photoWidth, height: photoHeight };
+}
+
 /** Map a 0–1 box (relative to captured image) onto a cover-fit camera preview. */
 export function mapNormalizedBoxToCoverDisplay(
   box: { x: number; y: number; width: number; height: number },

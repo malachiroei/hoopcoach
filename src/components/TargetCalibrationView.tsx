@@ -218,7 +218,7 @@ export function TargetCalibrationView({
     <View style={styles.container}>
       <Image
         source={{ uri: imageUri }}
-        style={{ width: displayWidth, height: displayHeight }}
+        style={{ width: displayWidth, height: displayHeight, direction: 'ltr' }}
         resizeMode="cover"
       />
 

@@ -43,23 +43,45 @@ interface DetectShotRequest {
   prevImageBase64?: string;
   prevImage2Base64?: string;
   mode?: "track" | "outcome" | "calibrate";
+  /** Phone films a TV / YouTube / stream — use broadcast-specific rules. */
+  screenMode?: boolean;
 }
+
+const BROADCAST_SCENE = `
+TV / YOUTUBE / STREAM BROADCAST (EuroLeague, NBA, etc.) — elevated sideline camera:
+- Analyze ONLY the game picture inside the screen. Ignore room, bezels, phone UI.
+- REAL HOOP: white/clear rectangular BACKBOARD + orange/red circular RIM below it, mounted on a pole.
+  Usually in the UPPER area of the court (rim center y ≈ 0.12–0.38). Often upper-left or upper-center.
+  hoopBox must cover backboard + rim. Box center = RIM opening (not the net, not the pole base).
+- NOT A HOOP: sideline LED ad panels ("Winner", sponsor text), bench areas, shot-clock boxes on the sideline.
+  These are flat vertical boards at court EDGE height (y ≈ 0.35–0.65) — they are NOT backboards.
+- REAL BALL: tiny orange/brown sphere (0.8%–3% of image width) in a player's HANDS, dribbling, or in flight.
+  ballBox center = exact center of the visible sphere. width ≈ height (square-ish box around circle).
+- NOT A BALL: large circular sponsor logos PAINTED on the hardwood floor ("Winner" on court, center circle).
+  Floor logos sit in the LOWER third (y > 0.65), flat on the ground — never in a player's hands.
+- If a player in a colored jersey is holding something round at chest/waist height — that round object IS the ball.
+- Compare: floor logos stay fixed on parquet; the ball moves with players.`;
 
 const CALIBRATE_PROMPT = `You are a basketball OBJECT LOCATOR. Find exactly two things in this image.
 
 BASKETBALL (ballBox):
-- ANY round/spherical ball — color and size do NOT matter (orange, white, brown, small on TV, large on court).
-- May be in a player's hands, bouncing, or in flight.
-- Shape is always a circle/sphere. NEVER tag: floor logos, ad boards, heads, or circular graphics.
+- Round/spherical ball — orange, brown, or tan. May be tiny on TV (0.8%–3% of image width).
+- In a player's hands, bouncing, or in flight. Center the box on the sphere's visible circle.
+- NEVER tag: floor logos (Winner, sponsor circles on parquet), heads, LED boards, or static court paint.
 
 HOOP (hoopBox):
-- Basketball goal = rectangular BACKBOARD + circular RIM (ring) hanging below it.
-- Size and color do NOT matter. Tag the backboard+rims area as one box.
-- Usually in upper portion of scene. NEVER tag: sideline ads, scoreboards, shot clocks, floor paint.
+- Goal = rectangular BACKBOARD + circular RIM below it. One box covering both.
+- Rim center usually in UPPER third of scene (y < 0.4). Box center = rim opening.
+- NEVER tag: sideline advertising panels, scoreboards, shot clocks, floor decals.
+
+PRECISION:
+- x,y = top-left corner of box; width/height = box size. All values 0–1 vs full JPEG.
+- ballBox: width and height should be similar (circle). Place center on ball, not offset to the side.
+- hoopBox: wider than tall (backboard shape). Include backboard top through rim.
 
 Return ONLY valid JSON:
 {
-  "observation": "where you see ball and hoop",
+  "observation": "describe exact ball location (e.g. in red #22 player hands) and hoop (backboard+rim)",
   "ballVisible": boolean,
   "hoopVisible": boolean,
   "ballBox": { "x": 0-1, "y": 0-1, "width": 0-1, "height": 0-1, "confidence": 0-1 } or null,
@@ -70,11 +92,12 @@ Return ONLY valid JSON:
   "zone": null,
   "side": null,
   "confidence": number,
-  "players": []
+  "players": [{ "index": 1, "x": 0-1, "y": 0-1, "width": 0-1, "height": 0-1, "confidence": 0-1 }]
 }
 
 Coordinates: normalized 0-1 relative to JPEG pixels, top-left origin.
-If ballVisible=true → ballBox required. If hoopVisible=true → hoopBox required.`;
+If ballVisible=true → ballBox required. If hoopVisible=true → hoopBox required.
+Include players (up to 6) when visible — helps verify ball is near a player, not a floor logo.`;
 
 const OBJECT_IDENTIFICATION = `
 CRITICAL — locate these objects precisely in the IMAGE (not the phone UI):
@@ -139,11 +162,11 @@ const SCREEN_TRACKING = `
 SCREEN / TV MODE (very common):
 - Phone films a monitor, laptop, or TV showing a live basketball game.
 - IGNORE the room, desk, bezels, and phone UI. Analyze ONLY pixels inside the game display.
+${BROADCAST_SCENE}
 - The ball on screen may be TINY (3-20 pixels, 0.5%-2% of image width). You MUST still detect it.
 - To find a tiny ball: compare all frames — look for the small round object that MOVED between frames.
 - Ball color on TV: orange, brown, white, or tan. A flying ball leaves a motion trail across frames.
-- The hoop on TV: backboard rectangle + rim. Re-detect its position in the CURRENT frame every time.
-- If the camera shakes slightly, hoop and player boxes MUST move accordingly in the current frame.`;
+- Re-detect hoop every frame in the CURRENT frame — backboard+rim, NOT sideline ads.`;
 
 const TRACK_PROMPT = `You are a real-time basketball OBJECT TRACKER analyzing a sequence of camera frames.
 ${OBJECT_IDENTIFICATION}
@@ -318,7 +341,43 @@ function isValidHoopBox(box: CloudNormalizedBox): boolean {
   return box.confidence >= 0.12;
 }
 
-function sanitizeBoxes(result: DetectShotResponse): DetectShotResponse {
+function isLikelyFloorLogoBall(box: CloudNormalizedBox, players: CloudPlayerBox[]): boolean {
+  const { cx, cy } = boxCenter(box);
+  if (cy < 0.62) return false;
+  if (overlapsPlayer(box, players)) return false;
+  const aspect = box.width / Math.max(box.height, 0.001);
+  return aspect > 0.5 && aspect < 2 && box.width > 0.025;
+}
+
+function isLikelySidelineAdHoop(box: CloudNormalizedBox): boolean {
+  const { cy } = boxCenter(box);
+  if (cy < 0.42) return false;
+  if (box.height > 0.22) return false;
+  return box.width > 0.12;
+}
+
+function sanitizeBroadcastBoxes(result: DetectShotResponse): DetectShotResponse {
+  const players = result.players ?? [];
+  let ballBox = result.ballBox;
+  let hoopBox = result.hoopBox;
+
+  if (ballBox && isLikelyFloorLogoBall(ballBox, players)) {
+    ballBox = null;
+  }
+  if (hoopBox && isLikelySidelineAdHoop(hoopBox)) {
+    hoopBox = null;
+  }
+
+  return {
+    ...result,
+    ballBox,
+    hoopBox,
+    ballVisible: Boolean(ballBox),
+    hoopVisible: Boolean(hoopBox),
+  };
+}
+
+function sanitizeBoxes(result: DetectShotResponse, screenMode = false): DetectShotResponse {
   const players = result.players ?? [];
   let ballBox = result.ballBox;
   let hoopBox = result.hoopBox;
@@ -330,7 +389,7 @@ function sanitizeBoxes(result: DetectShotResponse): DetectShotResponse {
     hoopBox = null;
   }
 
-  return {
+  let sanitized: DetectShotResponse = {
     ...result,
     players,
     ballBox,
@@ -338,9 +397,15 @@ function sanitizeBoxes(result: DetectShotResponse): DetectShotResponse {
     ballVisible: Boolean(ballBox) || result.ballVisible,
     hoopVisible: Boolean(hoopBox) || result.hoopVisible,
   };
+
+  if (screenMode) {
+    sanitized = sanitizeBroadcastBoxes(sanitized);
+  }
+
+  return sanitized;
 }
 
-function postProcessDetection(result: DetectShotResponse): DetectShotResponse {
+function postProcessDetection(result: DetectShotResponse, screenMode = false): DetectShotResponse {
   const observation = result.observation.toLowerCase();
   const shootingCue = /free throw|shoot|release|shot|arc|ball in|flight|toward hoop|לזרוק|זריקה|עונשין|hands|arms|in the air/.test(
     observation,
@@ -420,10 +485,10 @@ function postProcessDetection(result: DetectShotResponse): DetectShotResponse {
     event,
     zone,
     confidence,
-  });
+  }, screenMode);
 }
 
-function parseModelJson(raw: string): DetectShotResponse {
+function parseModelJson(raw: string, screenMode = false): DetectShotResponse {
   const cleaned = raw
     .trim()
     .replace(/^```json\s*/i, "")
@@ -448,7 +513,7 @@ function parseModelJson(raw: string): DetectShotResponse {
     ballBox: normalizeBox(parsed.ballBox),
     hoopBox: normalizeBox(parsed.hoopBox),
     players: normalizePlayers(parsed.players),
-  });
+  }, screenMode);
 }
 
 function delay(ms: number): Promise<void> {
@@ -459,6 +524,8 @@ async function callGeminiModel(
   model: string,
   apiKey: string,
   parts: Array<Record<string, unknown>>,
+  temperature = 0.2,
+  screenMode = false,
 ): Promise<DetectShotResponse> {
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
@@ -468,7 +535,7 @@ async function callGeminiModel(
       body: JSON.stringify({
         contents: [{ role: "user", parts }],
         generationConfig: {
-          temperature: 0.2,
+          temperature,
           responseMimeType: "application/json",
         },
       }),
@@ -492,7 +559,7 @@ async function callGeminiModel(
     throw new Error("Gemini returned no text content");
   }
 
-  return parseModelJson(text);
+  return parseModelJson(text, screenMode);
 }
 
 function buildImageParts(
@@ -500,16 +567,22 @@ function buildImageParts(
   prevImageBase64?: string,
   prevImage2Base64?: string,
   mode: "track" | "outcome" | "calibrate" = "track",
+  screenMode = false,
 ): Array<Record<string, unknown>> {
+  const broadcastSuffix = screenMode ? `\n${BROADCAST_SCENE}` : "";
   const prompt = mode === "calibrate"
-    ? CALIBRATE_PROMPT
+    ? `${CALIBRATE_PROMPT}${broadcastSuffix}`
     : mode === "outcome"
-    ? OUTCOME_PROMPT
-    : TRACK_PROMPT;
+    ? `${OUTCOME_PROMPT}${broadcastSuffix}`
+    : `${TRACK_PROMPT}${broadcastSuffix}`;
   const parts: Array<Record<string, unknown>> = [{ text: prompt }];
 
   if (mode === "calibrate") {
-    parts.push({ text: "Calibration frame — locate ball and hoop precisely:" });
+    parts.push({
+      text: screenMode
+        ? "Broadcast/TV frame — locate the real ball (in player hands) and hoop (backboard+rim), NOT floor logos or sideline ads:"
+        : "Calibration frame — locate ball and hoop precisely:",
+    });
     parts.push({
       inline_data: {
         mime_type: "image/jpeg",
@@ -558,13 +631,15 @@ async function callGemini(
   prevImageBase64?: string,
   prevImage2Base64?: string,
   mode: "track" | "outcome" | "calibrate" = "track",
+  screenMode = false,
 ): Promise<DetectShotResponse> {
   const apiKey = Deno.env.get("GEMINI_API_KEY");
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is not configured");
   }
 
-  const parts = buildImageParts(imageBase64, prevImageBase64, prevImage2Base64, mode);
+  const parts = buildImageParts(imageBase64, prevImageBase64, prevImage2Base64, mode, screenMode);
+  const temperature = mode === "calibrate" ? 0.08 : 0.2;
 
   const models = [
     "gemini-2.5-flash",
@@ -575,7 +650,7 @@ async function callGemini(
 
   for (const model of models) {
     try {
-      return await callGeminiModel(model, apiKey, parts);
+      return await callGeminiModel(model, apiKey, parts, temperature, screenMode);
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       lastError = err;
@@ -653,13 +728,14 @@ async function detectShot(
   prevImageBase64?: string,
   prevImage2Base64?: string,
   mode: "track" | "outcome" | "calibrate" = "track",
+  screenMode = false,
 ): Promise<DetectShotResponse> {
   const geminiKey = Deno.env.get("GEMINI_API_KEY");
   const openaiKey = Deno.env.get("OPENAI_API_KEY");
 
   if (geminiKey) {
     try {
-      return await callGemini(imageBase64, prevImageBase64, prevImage2Base64, mode);
+      return await callGemini(imageBase64, prevImageBase64, prevImage2Base64, mode, screenMode);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const status = (error as Error & { status?: number }).status;
@@ -710,12 +786,14 @@ Deno.serve(async (req) => {
       : body.mode === "calibrate"
       ? "calibrate"
       : "track";
+    const screenMode = body.screenMode !== false;
 
     const result = await detectShot(
       body.imageBase64,
       body.prevImageBase64,
       body.prevImage2Base64,
       resolvedMode,
+      screenMode,
     );
     return jsonResponse(result);
   } catch (error) {
